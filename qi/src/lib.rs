@@ -65,7 +65,7 @@ pub use self::{
     object::{AnyObject, Object, ObjectClient, ObjectExt},
     property::Property,
     service_directory::ServiceDirectory,
-    session::Capabilities,
+    session::{Capabilities, Target},
     signal::{Signal, Subscription},
 };
 pub use async_trait::async_trait;

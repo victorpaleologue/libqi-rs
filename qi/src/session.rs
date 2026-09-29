@@ -15,8 +15,9 @@ mod store;
 mod target;
 
 pub use self::capabilities::Capabilities;
+pub(crate) use self::store::Store;
+pub use self::target::Target;
 use self::{control::Control, handler::SessionHandler, host::ObjectHost};
-pub(crate) use self::{store::Store, target::Target};
 use crate::{
     auth::Authenticator,
     error::Error,

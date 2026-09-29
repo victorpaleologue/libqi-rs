@@ -241,13 +241,7 @@ where
 
 impl<T> Signal<T>
 where
-    T: Clone
-        + Send
-        + Sync
-        + 'static
-        + IntoValue<'static>
-        + FromValue<'static>
-        + Reflect,
+    T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
 {
     /// Emits a value to all subscribers.
     ///

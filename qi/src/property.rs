@@ -1,7 +1,7 @@
 //! Properties: typed values whose changes are notified.
 //!
 //! A [`Property`] holds a value that may be read and written, and notifies its changes to
-//! subscribers like a [`Signal`](crate::Signal). In the `qi` type system, a property is also a
+//! subscribers like a [`Signal`]. In the `qi` type system, a property is also a
 //! signal of the same identifier and name.
 //!
 //! Like signals, properties are either *local* or *proxies* to the property of a remote object,
@@ -51,13 +51,7 @@ enum PropertyInner<T> {
 
 impl<T> Property<T>
 where
-    T: Clone
-        + Send
-        + Sync
-        + 'static
-        + IntoValue<'static>
-        + FromValue<'static>
-        + Reflect,
+    T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
 {
     /// Creates a local property with an initial value.
     pub fn new(value: T) -> Self {
@@ -164,14 +158,7 @@ where
 
 impl<T> Default for Property<T>
 where
-    T: Default
-        + Clone
-        + Send
-        + Sync
-        + 'static
-        + IntoValue<'static>
-        + FromValue<'static>
-        + Reflect,
+    T: Default + Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
 {
     fn default() -> Self {
         Self::new(T::default())

@@ -42,13 +42,7 @@ trait ErasedSignal: Send + Sync {
 
 impl<T> ErasedSignal for Signal<T>
 where
-    T: Clone
-        + Send
-        + Sync
-        + 'static
-        + IntoValue<'static>
-        + FromValue<'static>
-        + Reflect,
+    T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
 {
     fn erased_subscribe(&self) -> BoxFuture<'_, Result<ValueStream>> {
         Box::pin(self.subscribe_erased())
@@ -68,13 +62,7 @@ trait ErasedProperty: Send + Sync {
 
 impl<T> ErasedProperty for Property<T>
 where
-    T: Clone
-        + Send
-        + Sync
-        + 'static
-        + IntoValue<'static>
-        + FromValue<'static>
-        + Reflect,
+    T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
 {
     fn erased_get(&self) -> BoxFuture<'_, Result<Value<'static>>> {
         Box::pin(self.get_erased())
@@ -123,7 +111,7 @@ impl ObjectBuilder {
 
     /// Adds a method implemented by an asynchronous function of its arguments.
     ///
-    /// The arguments type `Args` follows the parameters conventions of [`ObjectExt`]: a tuple
+    /// The arguments type `Args` follows the parameters conventions of [`ObjectExt`](crate::ObjectExt): a tuple
     /// maps to several parameters, `()` to none and any other type to a single parameter.
     pub fn add_method<F, Fut, Args, R>(&mut self, name: impl Into<String>, f: F) -> ActionId
     where
@@ -187,13 +175,7 @@ impl ObjectBuilder {
     /// Adds a signal.
     pub fn add_signal<T>(&mut self, name: impl Into<String>, signal: Signal<T>) -> ActionId
     where
-        T: Clone
-            + Send
-            + Sync
-            + 'static
-            + IntoValue<'static>
-            + FromValue<'static>
-            + Reflect,
+        T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
     {
         let id = self.next_id();
         self.add_signal_with_id(id, name, signal);
@@ -208,13 +190,7 @@ impl ObjectBuilder {
         signal: Signal<T>,
     ) -> &mut Self
     where
-        T: Clone
-            + Send
-            + Sync
-            + 'static
-            + IntoValue<'static>
-            + FromValue<'static>
-            + Reflect,
+        T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
     {
         self.meta.signals.insert(
             id,
@@ -231,13 +207,7 @@ impl ObjectBuilder {
     /// Adds a property.
     pub fn add_property<T>(&mut self, name: impl Into<String>, property: Property<T>) -> ActionId
     where
-        T: Clone
-            + Send
-            + Sync
-            + 'static
-            + IntoValue<'static>
-            + FromValue<'static>
-            + Reflect,
+        T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
     {
         let id = self.next_id();
         self.add_property_with_id(id, name, property);
@@ -252,13 +222,7 @@ impl ObjectBuilder {
         property: Property<T>,
     ) -> &mut Self
     where
-        T: Clone
-            + Send
-            + Sync
-            + 'static
-            + IntoValue<'static>
-            + FromValue<'static>
-            + Reflect,
+        T: Clone + Send + Sync + 'static + IntoValue<'static> + FromValue<'static> + Reflect,
     {
         let name = name.into();
         // Properties are also signals of their changes.
