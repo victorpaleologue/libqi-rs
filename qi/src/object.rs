@@ -241,7 +241,11 @@ pub trait ObjectExt: Object {
         R: FromValue<'static> + Reflect,
     {
         let args = params::to_params::<T>(args.into_value());
-        let result = self.meta_call(ident.into(), args).await?;
+        let result = self
+            .meta_call(ident.into(), args)
+            .await?
+            .convert_to(R::ty().as_ref())
+            .map_err(ValueConversionError::MethodReturnValue)?;
         R::from_value(result).map_err(|err| ValueConversionError::MethodReturnValue(err).into())
     }
 
@@ -561,6 +565,11 @@ impl Object for ObjectClient {
     async fn meta_call(&self, ident: ActionNameOrId, args: Value<'_>) -> Result<Value<'static>> {
         let method = self.method(&ident)?;
         let (uid, return_type) = (method.uid, method.return_signature.as_type());
+        // Arguments are converted to the parameters of the remote method, as the remote peer
+        // decodes them according to its own signature.
+        let args = args
+            .convert_to(method.parameters_signature.as_type())
+            .map_err(ValueConversionError::Arguments)?;
         self.call_action(uid, args, return_type).await
     }
 
@@ -569,11 +578,24 @@ impl Object for ObjectClient {
             .0
             .meta
             .method(&ident)
-            .map(|method| method.uid)
-            .or_else(|| self.0.meta.signal(&ident).map(|signal| signal.uid));
-        match action {
-            Some(action) => self.post_action(action, args),
-            None => warn!(member = %ident, "post request error: member not found"),
+            .map(|method| (method.uid, method.parameters_signature.as_type()))
+            .or_else(|| {
+                self.0
+                    .meta
+                    .signal(&ident)
+                    .map(|signal| (signal.uid, signal.signature.as_type()))
+            });
+        let Some((action, params_type)) = action else {
+            warn!(member = %ident, "post request error: member not found");
+            return;
+        };
+        match args.convert_to(params_type) {
+            Ok(args) => self.post_action(action, args),
+            Err(error) => warn!(
+                member = %ident,
+                error = &error as &dyn std::error::Error,
+                "post request error: arguments conversion failed"
+            ),
         }
     }
 

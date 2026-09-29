@@ -129,7 +129,10 @@ where
                 },
                 SubscriptionInner::Erased { stream, ty, .. } => match stream.poll_next_unpin(cx) {
                     Poll::Ready(Some(value)) => {
-                        match T::from_value(params::from_params_of(ty.as_ref(), value)) {
+                        let converted = params::from_params_of(ty.as_ref(), value)
+                            .convert_to(ty.as_ref())
+                            .and_then(T::from_value);
+                        match converted {
                             Ok(value) => return Poll::Ready(Some(value)),
                             Err(error) => {
                                 warn!(
@@ -287,10 +290,11 @@ where
 
     /// Emits an untyped parameters tuple, converting it to the signal type first.
     pub(crate) fn emit_erased(&self, params: Value<'_>) -> Result<()> {
-        let value = T::from_value(
-            params::from_params_of(<T as Reflect>::ty().as_ref(), params).into_owned(),
-        )
-        .map_err(crate::error::ValueConversionError::Arguments)?;
+        let ty = <T as Reflect>::ty();
+        let value = params::from_params_of(ty.as_ref(), params)
+            .convert_to(ty.as_ref())
+            .and_then(|value| T::from_value(value.into_owned()))
+            .map_err(crate::error::ValueConversionError::Arguments)?;
         self.emit(value);
         Ok(())
     }

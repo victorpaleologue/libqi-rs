@@ -424,3 +424,111 @@ async fn authentication_is_enforced() {
     let sum: i32 = calculator.call("add", (1, 1)).await.unwrap();
     assert_eq!(sum, 2);
 }
+
+#[tokio::test]
+async fn services_are_registered_and_unregistered_after_start() {
+    let space = host_space(vec![]).await;
+    let client = connect(space.address).await;
+    let (_calc, object) = Calculator::new();
+    let mut init = node::init();
+    init.bind("tcp://127.0.0.1:0".parse().unwrap());
+    let provider = init
+        .connect_to_space(space.address, None)
+        .start()
+        .await
+        .unwrap();
+
+    let id = provider
+        .register_service_object("Calculator", object)
+        .await
+        .unwrap();
+    assert!(id.0 >= 2);
+    let calculator = client.service("Calculator").await.unwrap();
+    let sum: i32 = calculator.call("add", (2, 3)).await.unwrap();
+    assert_eq!(sum, 5);
+
+    provider.unregister_service(id).await.unwrap();
+    assert!(client
+        .service_directory()
+        .service("Calculator")
+        .await
+        .is_err());
+    // The service object is not reachable through the provider anymore either.
+    let (_calc2, object2) = Calculator::new();
+    let new_id = provider
+        .register_service_object("Calculator", object2)
+        .await
+        .unwrap();
+    assert_ne!(new_id, id);
+}
+
+/// The pattern of the NAOqi APIs predating object passing: a client registers a service on its
+/// own node, then asks a service of the space to call it back by name. The called service looks
+/// the callback service up in the directory and calls it.
+#[tokio::test]
+async fn services_call_back_services_registered_by_clients() {
+    let space = host_space(vec![]).await;
+    let host = Arc::new(space.host);
+
+    // The "audio device" of the host calls `processRemote` on the service whose name is given to
+    // `subscribe`, like ALAudioDevice does.
+    let mut builder = ObjectBuilder::new();
+    let node = Arc::downgrade(&host);
+    builder.add_method("subscribe", move |name: String| {
+        let node = node.clone();
+        async move {
+            let node = node.upgrade().ok_or(Error::Other("node is gone".into()))?;
+            let subscriber = node.service(&name).await?;
+            let () = subscriber
+                .call(
+                    "processRemote",
+                    (2, 3, 1234, qi::value::AsRaw(vec![0u8; 12])),
+                )
+                .await?;
+            Ok(())
+        }
+    });
+    host.register_service_object("AudioDevice", AnyObject::new(builder.build()))
+        .await
+        .unwrap();
+
+    // The client registers its callback service on its own node, then subscribes.
+    let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = ObjectBuilder::new();
+    let received2 = received.clone();
+    builder.add_method(
+        "processRemote",
+        move |(channels, samples, timestamp, buffer): (
+            i32,
+            i32,
+            qi::value::Dynamic<i32>,
+            qi::value::Dynamic<qi::value::AsRaw<Vec<u8>>>,
+        )| {
+            let received = received2.clone();
+            async move {
+                received
+                    .lock()
+                    .unwrap()
+                    .push((channels, samples, timestamp.0, buffer.0 .0.len()));
+                Ok(())
+            }
+        },
+    );
+    let mut init = node::init();
+    init.bind("tcp://127.0.0.1:0".parse().unwrap());
+    let client = init
+        .connect_to_space(space.address, None)
+        .start()
+        .await
+        .unwrap();
+    client
+        .register_service_object("Audio-Subscriber", AnyObject::new(builder.build()))
+        .await
+        .unwrap();
+    let audio = client.service("AudioDevice").await.unwrap();
+    let () = audio
+        .call("subscribe", "Audio-Subscriber".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(received.lock().unwrap().as_slice(), [(2, 3, 1234, 12)]);
+}

@@ -234,6 +234,11 @@ impl SharedServices {
         self.lock().0.insert(info.id(), Service { info, object });
     }
 
+    /// Removes a service, returning its info if it was registered.
+    pub(crate) fn remove(&self, id: Id) -> Option<Info> {
+        self.lock().0.remove(&id).map(|service| service.info)
+    }
+
     /// The main object of a service.
     pub(crate) fn object(&self, id: Id) -> Option<AnyObject> {
         self.lock().0.get(&id).map(|service| service.object.clone())

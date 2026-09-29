@@ -149,9 +149,9 @@ where
 
         // Register each service to the directory, and mark them as ready.
         stream::iter(self.pending_services)
-            .map(Ok)
-            .try_for_each_concurrent(None, |(service_name, service_object)| {
-                Self::register_pending_service(
+            .map(Ok::<_, Error>)
+            .try_for_each_concurrent(None, |(service_name, service_object)| async {
+                register_service(
                     self.uid.clone(),
                     &services,
                     &service_directory,
@@ -159,6 +159,8 @@ where
                     service_object,
                     server_endpoints.clone(),
                 )
+                .await?;
+                Ok(())
             })
             .await?;
 
@@ -198,29 +200,33 @@ where
             endpoints: endpoints_watcher,
         })
     }
+}
 
-    async fn register_pending_service<SD>(
-        uid: Uid,
-        services: &service::SharedServices,
-        service_directory: &SD,
-        name: String,
-        object: AnyObject,
-        endpoints: Vec<session::Target>,
-    ) -> Result<()>
-    where
-        SD: ServiceDirectory,
-    {
-        let mut info = service::Info::unregistered(name, endpoints, uid, object.uid());
-        // Registering the service to the directory gets us a service ID, that we can use to
-        // update the local service info. With it, we can also index the service to the
-        // messaging handler so that it can start treating requests for that service.
-        // Consequently, we can notify the service directory of the readiness of the service.
-        let service_id = service_directory.register(&info).await?;
-        info.id = service_id;
-        services.add(info, object);
-        service_directory.set_ready(service_id).await?;
-        Ok(())
+/// Registers a service to the directory and indexes it in the node services.
+async fn register_service<SD>(
+    uid: Uid,
+    services: &service::SharedServices,
+    service_directory: &SD,
+    name: String,
+    object: AnyObject,
+    endpoints: Vec<session::Target>,
+) -> Result<service::Id>
+where
+    SD: ServiceDirectory,
+{
+    let mut info = service::Info::unregistered(name, endpoints, uid, object.uid());
+    // Registering the service to the directory gets us a service ID, that we can use to
+    // update the local service info. With it, we can also index the service to the
+    // messaging handler so that it can start treating requests for that service.
+    // Consequently, we can notify the service directory of the readiness of the service.
+    let service_id = service_directory.register(&info).await?;
+    info.id = service_id;
+    services.add(info, object);
+    if let Err(err) = service_directory.set_ready(service_id).await {
+        services.remove(service_id);
+        return Err(err);
     }
+    Ok(service_id)
 }
 
 impl<Method> std::fmt::Debug for InitializingNode<Method>
@@ -287,6 +293,50 @@ where
         )
         .await?;
         Ok(AnyObject::new(object))
+    }
+
+    /// Registers a service on the node, making it reachable from the space under the name.
+    ///
+    /// Services may be registered at any time once the node is started, which is required for
+    /// services that need the node itself, for instance to reach other services of the space.
+    /// Returns the identifier of the service in the space.
+    pub async fn register_service<Name, O>(&self, name: Name, object: O) -> Result<service::Id>
+    where
+        Name: Into<String>,
+        O: Object + 'static,
+    {
+        self.register_service_object(name, AnyObject::new(object))
+            .await
+    }
+
+    /// Registers a shared service object on the node. See [`Node::register_service`].
+    pub async fn register_service_object<Name>(
+        &self,
+        name: Name,
+        object: AnyObject,
+    ) -> Result<service::Id>
+    where
+        Name: Into<String>,
+    {
+        register_service(
+            self.uid.clone(),
+            &self.services,
+            &self.service_directory,
+            name.into(),
+            object,
+            self.endpoints(),
+        )
+        .await
+    }
+
+    /// Unregisters a service of the node from the space.
+    ///
+    /// Sessions that hold proxies to the service object may keep using them until they are
+    /// released.
+    pub async fn unregister_service(&self, id: service::Id) -> Result<()> {
+        self.service_directory.unregister(id).await?;
+        self.services.remove(id);
+        Ok(())
     }
 
     /// The service directory of the space.

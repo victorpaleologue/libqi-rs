@@ -1,3 +1,4 @@
+mod convert;
 pub mod de;
 mod impls;
 mod ser;

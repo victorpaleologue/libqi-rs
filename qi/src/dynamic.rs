@@ -163,11 +163,18 @@ impl ObjectBuilder {
         builder.return_value().set_type(<R as Reflect>::ty());
         self.meta.methods.insert(id, builder.build());
         let f = Arc::new(f);
+        let params_type = Arc::new(params_type);
         self.methods.insert(
             id,
             Arc::new(move |args: Value<'static>| {
                 let f = Arc::clone(&f);
+                let params_type = Arc::clone(&params_type);
                 Box::pin(async move {
+                    // Local callers may pass arguments of other (compatible) types than the
+                    // declared parameters, e.g. static values for dynamic parameters.
+                    let args = args
+                        .convert_to(Some(&params_type))
+                        .map_err(crate::error::ValueConversionError::Arguments)?;
                     let args = params::from_params::<Args>(args);
                     let args = Args::from_value(args)
                         .map_err(crate::error::ValueConversionError::Arguments)?;
