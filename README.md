@@ -21,7 +21,9 @@ processes as client, service and service directory.
 | [`qi-tools`](qi-tools/) | `qi-cli`, a command-line tool to inspect and drive services. |
 | [`naoqi-sim`](naoqi-sim/) | A simulated NAOqi robot: the services used by `naoqi_driver2` and robot HALs, without a robot. |
 
-The design is described in [`docs/architecture.md`](docs/architecture.md).
+The design is described in [`docs/architecture.md`](docs/architecture.md), and how the
+implementation was validated against `libqi`, the ROS 2 driver of the robots and the Arora
+runtime in [`docs/validation.md`](docs/validation.md).
 
 ## Quick start
 
