@@ -1,10 +1,8 @@
 #![allow(clippy::wrong_self_convention)]
-#[allow(dead_code)] // Being implemented; see `object` attribute below.
 mod object;
 mod value;
 
 use proc_macro::TokenStream;
-use quote::ToTokens;
 use syn::{parse_macro_input, DeriveInput, Error};
 
 #[proc_macro_derive(Valuable, attributes(qi))]
@@ -47,52 +45,74 @@ pub fn proc_macro_derive_from_value(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Declares an object type.
+/// Declares the interface of an object type.
 ///
-/// This macro declares a new trait and implements `qi::Object` for any
-/// type that implements that trait. It also declares a client type that
-/// implements that trait to call the object interface remotely.
+/// Applied to a trait, this attribute keeps the trait (adding `#[async_trait]` to it) and
+/// generates:
+///
+/// - `<Trait>Object<T>`: an adapter that implements `qi::Object` for any `T: Trait`, so that
+///   implementations of the trait can be published as services or passed as objects. Its meta
+///   object is derived from the trait declaration.
+/// - `<Trait>Client`: a typed proxy that implements the trait over any `qi::AnyObject`, local or
+///   remote, and checks at construction that the object exposes the members of the interface.
+///
+/// # Members
+///
+/// - Methods are `async fn name(&self, ...) -> Result<T>`: their arguments and return value are
+///   values of the `qi` type system (`qi::value::Reflect + FromValue + IntoValue`). A method may
+///   be tagged `#[qi::method(name = "...")]` to set its name in the meta object.
+/// - Signals are `#[qi::signal] fn name(&self) -> &qi::Signal<T>`.
+/// - Properties are `#[qi::property] fn name(&self) -> &qi::Property<T>`.
+///
+/// Members get increasing identifiers from 100 in declaration order. Documentation comments
+/// become the descriptions of the object and of its methods.
+///
+/// # Attribute arguments
+///
+/// - `case = "camelCase"` (or any casing of the value macros) converts the Rust identifiers of
+///   the members to that case for their names in the meta object, keeping leading underscores
+///   (hidden members).
+/// - `crate = "path"` sets the path of the `qi` crate (default `::qi`).
 ///
 /// # Example
 ///
 /// ```ignore
-/// # mod qi {
-/// #   pub(super) use qi_macros::{object, Valuable};
-/// # }
-/// use async_trait::async_trait;
+/// use qi::{Property, Signal};
 ///
-/// #[qi::object]
-/// #[async_trait]
-/// trait Motion {
-///     /// Go to some position.
-///     #[qi::method]
-///     async fn go_to(&self, position: Position) -> Result<(), Error>;
-///
-///     /// The current position.
-///     #[qi::property(get, name = "Position")]
-///     async fn position() -> Position;
-///
-///     #[qi::property(set, name = "Position")]
-///     async fn set_position(pos: Position);
-///
-///     /// The moving state.
+/// /// A counter.
+/// #[qi::object(case = "camelCase")]
+/// pub trait Counter {
+///     /// Increments the counter and returns its new value.
+///     async fn increment(&self, step: i32) -> qi::Result<i32>;
 ///     #[qi::signal]
-///     async fn on_moving<F>(&self, subscriber: F) where F: FnMut(bool)>;
+///     fn changed(&self) -> &Signal<i32>;
+///     #[qi::property]
+///     fn value(&self) -> &Property<i32>;
 /// }
 ///
-/// #[derive(qi::Valuable)]
-/// ##[qi(value(crate = "qi_value"))]
-/// struct Position {
-///     x: u32,
-///     y: u32,
+/// struct MyCounter { changed: Signal<i32>, value: Property<i32> }
+///
+/// #[qi::async_trait]
+/// impl Counter for MyCounter {
+///     async fn increment(&self, step: i32) -> qi::Result<i32> {
+///         let value = self.value.get().await? + step;
+///         self.value.set(value).await?;
+///         self.changed.emit(value);
+///         Ok(value)
+///     }
+///     fn changed(&self) -> &Signal<i32> { &self.changed }
+///     fn value(&self) -> &Property<i32> { &self.value }
 /// }
+///
+/// // Publishing: `node.register_service("Counter", CounterObject::new(my_counter))`.
+/// // Using: `let counter = CounterClient::new(node.service("Counter").await?)?;`
+/// // then `counter.increment(2).await?` and `counter.changed().subscribe().await?`.
 /// ```
-///
-/// This code declares the trait `Motion` and and a type `MotionClient`
-/// that implements `Motion`.
 #[proc_macro_attribute]
-pub fn object(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    parse_macro_input!(item as object::ObjectTrait)
-        .into_token_stream()
+pub fn object(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as object::Args);
+    let item = parse_macro_input!(item as syn::ItemTrait);
+    object::expand(args, item)
+        .unwrap_or_else(Error::into_compile_error)
         .into()
 }

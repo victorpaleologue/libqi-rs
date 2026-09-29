@@ -709,6 +709,11 @@ fn parse_name_attribute(meta: &syn::meta::ParseNestedMeta) -> syn::Result<String
 }
 
 fn parse_case_attribute(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Case<'static>> {
+    parse_case(&meta.value()?.parse::<LitStr>()?)
+}
+
+/// Parses a casing name such as `camelCase` or `snake_case`.
+pub(super) fn parse_case(value: &LitStr) -> syn::Result<Case<'static>> {
     const CASES: [(&str, Case); 9] = [
         ("lowercase", Case::Lower),
         ("UPPERCASE", Case::Upper),
@@ -720,15 +725,18 @@ fn parse_case_attribute(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Case<'
         ("kebab-case", Case::Kebab),
         ("SCREAMING-KEBAB-CASE", Case::UpperKebab),
     ];
-    let value = meta.value()?.parse::<LitStr>()?.value();
+    let name = value.value();
     CASES
         .iter()
-        .find_map(|(ident, case)| (*ident == value).then_some(*case))
+        .find_map(|(ident, case)| (*ident == name).then_some(*case))
         .ok_or_else(|| {
-            meta.error(format!(
-                "unknown casing value \"{value}\", possible values are [{:?}]",
-                CASES.iter().map(|(ident, _)| *ident).collect::<Vec<_>>()
-            ))
+            syn::Error::new_spanned(
+                value,
+                format!(
+                    "unknown casing value \"{name}\", possible values are [{:?}]",
+                    CASES.iter().map(|(ident, _)| *ident).collect::<Vec<_>>()
+                ),
+            )
         })
 }
 

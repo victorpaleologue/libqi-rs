@@ -14,8 +14,8 @@
 //! dropped with a warning.
 
 use crate::{
-    object::{params, ObjectClient},
-    value::{self, FromValue, IntoValue, Reflect, RuntimeReflect, Type, Value},
+    object::{params, ActionNameOrId, AnyObject, Object},
+    value::{FromValue, IntoValue, Reflect, RuntimeReflect, Type, Value},
     Result,
 };
 use futures::{stream::BoxStream, Stream, StreamExt};
@@ -183,9 +183,10 @@ pub struct Signal<T> {
 
 enum SignalInner<T> {
     Local(broadcast::Sender<T>),
+    /// A proxy to the signal of an object, identified by name or identifier.
     Remote {
-        object: ObjectClient,
-        id: value::object::ActionId,
+        object: AnyObject,
+        ident: ActionNameOrId,
         phantom: PhantomData<fn() -> T>,
     },
 }
@@ -210,17 +211,21 @@ where
         }
     }
 
-    pub(crate) fn remote(object: ObjectClient, id: value::object::ActionId) -> Self {
+    /// Creates a proxy to a signal of an object.
+    ///
+    /// The object may be local or remote: emissions and subscriptions go through its
+    /// [`Object`] implementation. The existence of the signal is checked when it is used.
+    pub fn of_object(object: AnyObject, ident: ActionNameOrId) -> Self {
         Self {
             inner: SignalInner::Remote {
                 object,
-                id,
+                ident,
                 phantom: PhantomData,
             },
         }
     }
 
-    /// Returns true if the signal is a proxy to a remote signal.
+    /// Returns true if the signal is a proxy to the signal of an object.
     pub fn is_remote(&self) -> bool {
         matches!(self.inner, SignalInner::Remote { .. })
     }
@@ -256,11 +261,41 @@ where
                 // An error means there is no subscriber, which is not an error for a signal.
                 let _res = sender.send(value);
             }
-            SignalInner::Remote { object, id, .. } => {
-                object.post_action(
-                    *id,
-                    params::to_params_of(<T as Reflect>::ty().as_ref(), value.into_value()),
-                );
+            SignalInner::Remote { object, ident, .. } => {
+                let params =
+                    params::to_params_of(<T as Reflect>::ty().as_ref(), value.into_value());
+                let result = match object.as_client() {
+                    // Remote objects post the parameters synchronously.
+                    Some(client) => client.emit_now(ident, params),
+                    // Other objects are emitted to asynchronously, in a task.
+                    None => match tokio::runtime::Handle::try_current() {
+                        Ok(handle) => {
+                            let (object, ident) = (object.clone(), ident.clone());
+                            let params = params.into_owned();
+                            handle.spawn(async move {
+                                if let Err(error) = object.meta_emit(ident.clone(), params).await {
+                                    warn!(
+                                        signal = %ident,
+                                        error = &error as &dyn std::error::Error,
+                                        "signal emission failed"
+                                    );
+                                }
+                            });
+                            Ok(())
+                        }
+                        Err(_) => Err(crate::Error::Other(
+                            "cannot emit a signal of an object outside of an asynchronous runtime"
+                                .into(),
+                        )),
+                    },
+                };
+                if let Err(error) = result {
+                    warn!(
+                        signal = %ident,
+                        error = &error as &dyn std::error::Error,
+                        "signal emission failed"
+                    );
+                }
             }
         }
     }
@@ -271,25 +306,27 @@ where
     pub async fn subscribe(&self) -> Result<Subscription<T>> {
         match &self.inner {
             SignalInner::Local(sender) => Ok(Subscription::local(sender.subscribe())),
-            SignalInner::Remote { object, id, .. } => Ok(Subscription::from_params(
-                object.subscribe_action(*id).await?,
+            SignalInner::Remote { object, ident, .. } => Ok(Subscription::from_params(
+                object.meta_subscribe(ident.clone()).await?,
                 <T as Reflect>::ty(),
             )),
         }
     }
 
     /// Subscribes to the signal as a stream of untyped parameters tuples.
-    pub(crate) async fn subscribe_erased(&self) -> Result<ValueStream> {
+    #[doc(hidden)]
+    pub async fn subscribe_erased(&self) -> Result<ValueStream> {
         match &self.inner {
             SignalInner::Local(sender) => Ok(erase_stream::<_, T>(Subscription::<T>::local(
                 sender.subscribe(),
             ))),
-            SignalInner::Remote { object, id, .. } => object.subscribe_action(*id).await,
+            SignalInner::Remote { object, ident, .. } => object.meta_subscribe(ident.clone()).await,
         }
     }
 
     /// Emits an untyped parameters tuple, converting it to the signal type first.
-    pub(crate) fn emit_erased(&self, params: Value<'_>) -> Result<()> {
+    #[doc(hidden)]
+    pub fn emit_erased(&self, params: Value<'_>) -> Result<()> {
         let ty = <T as Reflect>::ty();
         let value = params::from_params_of(ty.as_ref(), params)
             .convert_to(ty.as_ref())
@@ -340,9 +377,9 @@ impl<T> Clone for Signal<T> {
         Self {
             inner: match &self.inner {
                 SignalInner::Local(sender) => SignalInner::Local(sender.clone()),
-                SignalInner::Remote { object, id, .. } => SignalInner::Remote {
+                SignalInner::Remote { object, ident, .. } => SignalInner::Remote {
                     object: object.clone(),
-                    id: *id,
+                    ident: ident.clone(),
                     phantom: PhantomData,
                 },
             },
@@ -358,11 +395,11 @@ impl<T> std::fmt::Debug for Signal<T> {
                 .field("kind", &"local")
                 .field("subscribers", &sender.receiver_count())
                 .finish(),
-            SignalInner::Remote { object, id, .. } => f
+            SignalInner::Remote { object, ident, .. } => f
                 .debug_struct("Signal")
                 .field("kind", &"remote")
                 .field("object", object)
-                .field("id", id)
+                .field("ident", ident)
                 .finish(),
         }
     }

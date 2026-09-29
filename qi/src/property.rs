@@ -8,7 +8,8 @@
 //! and share the same API.
 
 use crate::{
-    object::ObjectClient,
+    error::ValueConversionError,
+    object::{ActionNameOrId, AnyObject, Object},
     signal::{Signal, Subscription, ValueStream},
     value::{self, FromValue, IntoValue, Reflect, RuntimeReflect, Value},
     Result,
@@ -40,9 +41,10 @@ enum PropertyInner<T> {
         value: Arc<RwLock<T>>,
         signal: Signal<T>,
     },
+    /// A proxy to the property of an object, identified by name or identifier.
     Remote {
-        object: ObjectClient,
-        id: value::object::ActionId,
+        object: AnyObject,
+        ident: ActionNameOrId,
         signal: Signal<T>,
     },
 }
@@ -68,14 +70,22 @@ where
         }
     }
 
-    pub(crate) fn remote(object: ObjectClient, id: value::object::ActionId) -> Self {
-        let signal = Signal::remote(object.clone(), id);
+    /// Creates a proxy to a property of an object.
+    ///
+    /// The object may be local or remote: accesses go through its [`Object`] implementation.
+    /// The existence of the property is checked when it is used.
+    pub fn of_object(object: AnyObject, ident: ActionNameOrId) -> Self {
+        let signal = Signal::of_object(object.clone(), ident.clone());
         Self {
-            inner: PropertyInner::Remote { object, id, signal },
+            inner: PropertyInner::Remote {
+                object,
+                ident,
+                signal,
+            },
         }
     }
 
-    /// Returns true if the property is a proxy to a remote property.
+    /// Returns true if the property is a proxy to the property of an object.
     pub fn is_remote(&self) -> bool {
         matches!(self.inner, PropertyInner::Remote { .. })
     }
@@ -84,7 +94,15 @@ where
     pub async fn get(&self) -> Result<T> {
         match &self.inner {
             PropertyInner::Local { value, .. } => Ok(read(value).clone()),
-            PropertyInner::Remote { object, id, .. } => object.property_action(*id).await,
+            PropertyInner::Remote { object, ident, .. } => {
+                let ty = <T as Reflect>::ty();
+                object
+                    .meta_property(ident.clone())
+                    .await?
+                    .convert_to(ty.as_ref())
+                    .and_then(T::from_value)
+                    .map_err(|err| ValueConversionError::MethodReturnValue(err).into())
+            }
         }
     }
 
@@ -96,9 +114,9 @@ where
                 signal.emit(new_value);
                 Ok(())
             }
-            PropertyInner::Remote { object, id, .. } => {
+            PropertyInner::Remote { object, ident, .. } => {
                 object
-                    .set_property_action(*id, new_value.into_value())
+                    .meta_set_property(ident.clone(), new_value.into_value())
                     .await
             }
         }
@@ -116,13 +134,20 @@ where
         }
     }
 
-    pub(crate) async fn get_erased(&self) -> Result<Value<'static>> {
+    /// Gets the value of the property as an untyped value.
+    #[doc(hidden)]
+    pub async fn get_erased(&self) -> Result<Value<'static>> {
         Ok(self.get().await?.into_value())
     }
 
-    pub(crate) async fn set_erased(&self, value: Value<'_>) -> Result<()> {
-        let value = T::from_value(value.into_owned())
-            .map_err(crate::error::ValueConversionError::Arguments)?;
+    /// Sets the value of the property from an untyped value, converting it to the property type.
+    #[doc(hidden)]
+    pub async fn set_erased(&self, value: Value<'_>) -> Result<()> {
+        let ty = <T as Reflect>::ty();
+        let value = value
+            .convert_to(ty.as_ref())
+            .and_then(|value| T::from_value(value.into_owned()))
+            .map_err(ValueConversionError::Arguments)?;
         self.set(value).await
     }
 
@@ -131,7 +156,9 @@ where
         <T as Reflect>::ty()
     }
 
-    pub(crate) async fn subscribe_erased(&self) -> Result<ValueStream> {
+    /// Subscribes to the changes of the property as a stream of untyped parameters tuples.
+    #[doc(hidden)]
+    pub async fn subscribe_erased(&self) -> Result<ValueStream> {
         self.signal().subscribe_erased().await
     }
 }
@@ -161,9 +188,13 @@ impl<T> Clone for Property<T> {
                     value: Arc::clone(value),
                     signal: signal.clone(),
                 },
-                PropertyInner::Remote { object, id, signal } => PropertyInner::Remote {
+                PropertyInner::Remote {
+                    object,
+                    ident,
+                    signal,
+                } => PropertyInner::Remote {
                     object: object.clone(),
-                    id: *id,
+                    ident: ident.clone(),
                     signal: signal.clone(),
                 },
             },
@@ -182,11 +213,11 @@ where
                 .field("kind", &"local")
                 .field("value", &*read(value))
                 .finish(),
-            PropertyInner::Remote { object, id, .. } => f
+            PropertyInner::Remote { object, ident, .. } => f
                 .debug_struct("Property")
                 .field("kind", &"remote")
                 .field("object", object)
-                .field("id", id)
+                .field("ident", ident)
                 .finish(),
         }
     }

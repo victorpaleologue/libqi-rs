@@ -510,6 +510,13 @@ impl ObjectClient {
         Ok(())
     }
 
+    /// Emits a signal of the remote object by posting its parameters, without waiting.
+    pub(crate) fn emit_now(&self, ident: &ActionNameOrId, params: Value<'_>) -> Result<()> {
+        let id = self.signal_id(ident)?;
+        self.post_action(id, params);
+        Ok(())
+    }
+
     /// Returns a proxy to a signal of the object.
     pub fn signal<T, I>(&self, ident: I) -> Result<Signal<T>>
     where
@@ -517,7 +524,7 @@ impl ObjectClient {
         T: Clone + Send + 'static,
     {
         let id = self.signal_id(&ident.into())?;
-        Ok(Signal::remote(self.clone(), id))
+        Ok(Signal::of_object(AnyObject::new(self.clone()), id.into()))
     }
 
     /// Returns a proxy to a property of the object.
@@ -534,7 +541,7 @@ impl ObjectClient {
             + RuntimeReflect,
     {
         let id = self.property_id(&ident.into())?;
-        Ok(Property::remote(self.clone(), id))
+        Ok(Property::of_object(AnyObject::new(self.clone()), id.into()))
     }
 }
 
@@ -602,9 +609,7 @@ impl Object for ObjectClient {
     async fn meta_emit(&self, ident: ActionNameOrId, params: Value<'_>) -> Result<()> {
         // Emitting a remote signal is posting its parameters to the signal member: the remote
         // object triggers it and bounces the event to subscribers.
-        let id = self.signal_id(&ident)?;
-        self.post_action(id, params);
-        Ok(())
+        self.emit_now(&ident, params)
     }
 
     async fn meta_property(&self, ident: ActionNameOrId) -> Result<Value<'static>> {

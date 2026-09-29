@@ -54,6 +54,10 @@ pub(crate) mod session;
 pub mod signal;
 pub mod value;
 
+#[doc(hidden)]
+#[path = "private.rs"]
+pub mod __private;
+
 pub use self::{
     dynamic::{DynamicObject, ObjectBuilder},
     error::{BoxError, Error, FormatError, HandlerError},
@@ -64,6 +68,7 @@ pub use self::{
     session::Capabilities,
     signal::{Signal, Subscription},
 };
+pub use async_trait::async_trait;
 pub use qi_format as format;
 pub use qi_macros::{object, FromValue, IntoValue, Reflect, ToValue, Valuable};
 pub use qi_messaging::{self as messaging, Address};
