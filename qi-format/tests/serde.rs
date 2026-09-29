@@ -520,3 +520,25 @@ fn machine_id_from_to_format() {
     let value_out = to_bytes(&machine_id).unwrap();
     assert_eq!(value_out, value_in);
 }
+
+#[test]
+fn list_of_dynamics_round_trips_as_dynamic_elements() {
+    use qi_value::{Dynamic, RuntimeReflect, Signature, Value};
+    // An `ALValue` array: every element carries its own signature.
+    let list = Value::List(vec![
+        Value::Dynamic(Box::new(Value::Float32(1.5.into()))),
+        Value::Dynamic(Box::new(Value::Float32(2.5.into()))),
+    ]);
+    assert_eq!(Signature::from(list.ty()).to_string(), "[m]");
+    let bytes = qi_format::to_bytes(&Dynamic(list.clone())).unwrap();
+    // Signature "[m]", then two elements each written as signature "f" + value.
+    assert_eq!(
+        bytes,
+        [
+            3, 0, 0, 0, b'[', b'm', b']', 2, 0, 0, 0, 1, 0, 0, 0, b'f', 0, 0, 0xc0, 0x3f, 1, 0, 0,
+            0, b'f', 0, 0, 0x20, 0x40
+        ]
+    );
+    let decoded: Dynamic<Value<'static>> = qi_format::from_slice(&bytes).unwrap();
+    assert_eq!(decoded.0, list);
+}

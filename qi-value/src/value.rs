@@ -221,20 +221,38 @@ impl RuntimeReflect for Value<'_> {
             Self::Float64(_) => Type::Float64,
             Self::String(_) => Type::String,
             Self::Raw(_) => Type::Raw,
-            Self::Option(v) => Type::Option(v.as_deref().map(|v| Box::new(v.ty()))),
-            Self::List(v) => Type::List(ty::reduce_type(v.iter().map(Value::ty)).map(Box::new)),
-            Self::Map(v) => {
-                let (key, value) = ty::reduce_map_types(v.iter().map(|(k, v)| (k.ty(), v.ty())));
-                let (key, value) = (key.map(Box::new), value.map(Box::new));
-                Type::Map { key, value }
-            }
-            Self::Tuple(v) => Type::Tuple(ty::Tuple::Tuple(
-                v.iter().map(Value::ty).map(Some).collect(),
-            )),
+            Self::Option(v) => Type::Option(v.as_deref().and_then(element_type).map(Box::new)),
+            Self::List(v) => Type::List(reduce_element_types(v.iter()).map(Box::new)),
+            Self::Map(v) => Type::Map {
+                key: reduce_element_types(v.keys()).map(Box::new),
+                value: reduce_element_types(v.values()).map(Box::new),
+            },
+            Self::Tuple(v) => Type::Tuple(ty::Tuple::Tuple(v.iter().map(element_type).collect())),
             Self::Object(_) => Type::Object,
+            // A dynamic value stands for its content: this is the type written in its signature
+            // when it is serialized on its own.
             Self::Dynamic(v) => v.ty(),
         }
     }
+}
+
+/// The type of a value as an element of a container: dynamic values are dynamic elements
+/// (`None`), since they are serialized with their own signature.
+fn element_type(value: &Value<'_>) -> Option<Type> {
+    match value {
+        Value::Dynamic(_) => None,
+        value => Some(value.ty()),
+    }
+}
+
+/// The common type of the elements of a container, `None` (dynamic) if any element is dynamic
+/// or if their types differ.
+fn reduce_element_types<'a, 'v: 'a>(values: impl Iterator<Item = &'a Value<'v>>) -> Option<Type> {
+    let mut types = Vec::new();
+    for value in values {
+        types.push(element_type(value)?);
+    }
+    ty::reduce_type(types)
 }
 
 pub trait IntoValue<'a>: Sized {
@@ -268,5 +286,48 @@ pub enum FromValueError {
 impl From<std::convert::Infallible> for FromValueError {
     fn from(value: std::convert::Infallible) -> Self {
         match value {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_elements_make_containers_dynamic() {
+        use crate::{reflect::RuntimeReflect, Signature};
+        let sig = |value: &Value<'_>| Signature::from(value.ty()).to_string();
+        let dynamic = |value: Value<'static>| Value::Dynamic(Box::new(value));
+        assert_eq!(
+            sig(&Value::List(vec![Value::Int32(1), Value::Int32(2)])),
+            "[i]"
+        );
+        assert_eq!(
+            sig(&Value::List(vec![
+                dynamic(Value::Int32(1)),
+                dynamic(Value::Int32(2))
+            ])),
+            "[m]"
+        );
+        assert_eq!(
+            sig(&Value::List(vec![Value::Int32(1), dynamic(Value::Unit)])),
+            "[m]"
+        );
+        assert_eq!(
+            sig(&Value::Tuple(vec![
+                Value::Int32(1),
+                dynamic(Value::Bool(true))
+            ])),
+            "(im)"
+        );
+        assert_eq!(
+            sig(&Value::Option(Some(Box::new(dynamic(Value::Int32(1)))))),
+            "+m"
+        );
+        let mut map = crate::Map::new();
+        map.insert(Value::String("k".into()), dynamic(Value::Int32(1)));
+        assert_eq!(sig(&Value::Map(map)), "{sm}");
+        // A dynamic value on its own is typed as its content.
+        assert_eq!(sig(&dynamic(Value::Int32(1))), "i");
     }
 }
