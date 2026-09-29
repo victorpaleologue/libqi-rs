@@ -539,6 +539,6 @@ fn list_of_dynamics_round_trips_as_dynamic_elements() {
             0, b'f', 0, 0, 0x20, 0x40
         ]
     );
-    let decoded: Dynamic<Value<'static>> = qi_format::from_slice(&bytes).unwrap();
-    assert_eq!(decoded.0, list);
+    let decoded: Dynamic<Value<'_>> = qi_format::from_slice(&bytes).unwrap();
+    assert_eq!(decoded.0.into_owned(), list);
 }
