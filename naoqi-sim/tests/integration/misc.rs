@@ -283,3 +283,31 @@ async fn simulator_shuts_down_cleanly() {
     let simulator = Arc::try_unwrap(simulator).ok().unwrap();
     simulator.shutdown().await;
 }
+
+#[tokio::test]
+async fn tls_endpoints_serve_authenticated_clients() {
+    // The path of naoqi_driver2 with a password: tcps:// and the nao user.
+    let simulator = Simulator::start(
+        Config::new(RobotModel::Pepper)
+            .listen_on(vec!["tcps://127.0.0.1:0".parse().unwrap()])
+            .with_password("secret"),
+    )
+    .await
+    .unwrap();
+    let address = simulator.address().unwrap();
+    assert!(address.to_string().starts_with("tcps://"), "{address}");
+    let mut credentials = qi::value::KeyDynValueMap::new();
+    credentials.set("auth_user", "nao");
+    credentials.set("auth_token", "secret");
+    let client = qi::node::init()
+        .connect_to_space(address, Some(credentials))
+        .start()
+        .await
+        .unwrap();
+    let memory = client.service("ALMemory").await.unwrap();
+    let robot: String = memory
+        .call("getData", "RobotConfig/Body/Type".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(robot, "Pepper");
+}

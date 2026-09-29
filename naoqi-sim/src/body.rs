@@ -382,17 +382,19 @@ impl Body {
             "---------------------- Model ---------------------------\n        JointName   Stiffness     Command      Sensor\n",
         );
         for (index, joint) in self.description.joints.iter().enumerate() {
-            let _ = writeln!(
+            writeln!(
                 summary,
                 "{:>17} {:>11.6} {:>11.6} {:>11.6}",
                 joint.name, state.stiffness[index], state.targets[index], state.angles[index]
-            );
+            )
+            .ok();
         }
-        let _ = writeln!(
+        writeln!(
             summary,
             "---------------------- Pose ----------------------------\nx {:.3} y {:.3} theta {:.3}",
             state.pose.x, state.pose.y, state.pose.theta
-        );
+        )
+        .ok();
         summary
     }
 
@@ -454,8 +456,7 @@ impl Body {
                 state.velocity[2],
             ));
         }
-        self.memory
-            .insert_all_silent(updates);
+        self.memory.insert_all_silent(updates);
         self.memory.insert_silent("DCM/Time", dcm_time);
     }
 

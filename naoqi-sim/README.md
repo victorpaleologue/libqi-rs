@@ -21,7 +21,7 @@ naoqi-sim [--robot nao|pepper] [--version M.m.p.b] [--name NAME]
 | `--robot` | `nao` | The robot model: `nao` (V6) or `pepper` (1.8). |
 | `--version` | `2.8.7.4` (NAO), `2.9.5.1` (Pepper) | The NAOqi version `ALSystem.systemVersion` reports. `naoqi_driver2` selects code paths on `< 2.8` and `< 2.9`. |
 | `--name` | `naoqi-sim` | The robot name (`ALSystem.robotName`). |
-| `--listen` | `tcp://0.0.0.0:9559` | An address to listen on. Repeatable. |
+| `--listen` | `tcp://0.0.0.0:9559` (+ `tcps://0.0.0.0:9503` with a password) | An address to listen on: `tcp://` or `tcps://` (TLS). Repeatable. |
 | `--password` | none | Enables authentication of the `nao` user with this password (`auth_user` / `auth_token` capabilities). Without it every connection is accepted. |
 | `--script` | none | A scenario script run once started (`-` reads the standard input), see below. |
 | `-v` | | More logs (`-vv` for the `qi` traces). |
@@ -33,8 +33,14 @@ cargo run -p naoqi-sim -- --robot pepper
 ros2 launch naoqi_driver naoqi_driver.launch.py nao_ip:=127.0.0.1 qi_listen_url:=tcp://0.0.0.0:0
 ```
 
-Note: with a password, `naoqi_driver2` switches to `tcps://<ip>:9503` (TLS). The simulator
-listens on plain `tcp` only, so use it without a password with that driver.
+With a password, `naoqi_driver2` switches to `tcps://<ip>:9503` (TLS) and authenticates as
+`nao`; the simulator then listens on that port too, with a self-signed certificate (see the
+`QI_TLS_CERTIFICATE` and `QI_TLS_PRIVATE_KEY` variables of the `qi` crate to provide one):
+
+```sh
+cargo run -p naoqi-sim -- --password secret
+ros2 launch naoqi_driver naoqi_driver.launch.py nao_ip:=127.0.0.1 password:=secret
+```
 
 ### Scenario scripts
 
@@ -87,7 +93,7 @@ odometry), its `LogHub` and the states of its services (`services().tts`, `.audi
 | `ALMotion` | `getRobotConfig()->[[m]]`, `getSensorNames()`, `getBodyNames(s)`, `getJointNames(s)`, `getLimits(s)->[[m]]`, `getAngles(m,b)->[f]`, `setAngles(m,m,f)`, `changeAngles(m,m,f)`, `angleInterpolation(m,m,m,b)`, `angleInterpolationWithSpeed(m,m,f)`, `getStiffnesses(m)`, `setStiffnesses(m,m)`, `stiffnessInterpolation(m,m,m)`, `getPosition(s,i,b)->[f]`, `getRobotPosition(b)`, `getRobotVelocity()`, `move(fff)`, `moveToward(fff)`, `moveTo(fff)`, `stopMove()`, `moveInit()`, `moveIsActive()`, `waitUntilMoveIsFinished()`, `wakeUp()`, `rest()`, `robotIsWakeUp()`, `getSummary()`, `killAll()`, protection/breathing/idle/fall-manager flags. | Full NAO (26 joints, `JointActuators` = 25) and Pepper (17 joints + 3 wheels) tables with limits. A 50 Hz tick moves the joints toward their targets at `fractionMaxSpeed × maxVelocity`, publishes `Device/SubDeviceList/<J>/{Position/Sensor,Position/Actuator,ElectricCurrent,Temperature,Hardness}` and `Motion/{Velocity,Torque}/Sensor/<J>`, and integrates the odometry (`move` sets a velocity, `moveTo` moves for a computed duration and lands exactly on the target). |
 | `ALVideoDevice` | `subscribeCamera(siiii)->s`, `subscribe(siii)->s`, `unsubscribe(s)->b`, `unsubscribeAllInstances(s)`, `getImageRemote(s)->[m]`, `getDirectRawImageRemote`, `getImageLocal`, `releaseImage(s)->b`, `getSubscribers()`, `getActiveCamera()`, `setActiveCamera(i)`, `getCameraIndexes()`, `getCameraName(i)`, `isCameraOpen(i)`, `hasDepthCamera()`, `getCameraModel(i)`, `set/getResolution`, `set/getColorSpace`, `set/getFrameRate`, `setParameter(iii)`, `getParameter(ii)`, `setCameraParameter`, `getCameraParameter`. | Cameras 0 (top) and 1 (bottom); 2 (depth) and 3 (stereo) on Pepper. Handles are `<name>_<n>`. Images are synthesized (a gradient with a moving square) at the size of the resolution (kQQVGA … k720px2) and colorspace (1, 2, 3, 4 or 12 bytes per pixel; depth and infrared are 16-bit). `getImageRemote` returns the 12-element `ALValue` of NAOqi with fresh timestamps and the camera field of view. |
 | `ALAudioDevice` | `setClientPreferences(siii)`, `subscribe(s)`, `unsubscribe(s)`, `getSubscribers()`, `setOutputVolume(i)`, `getOutputVolume()`, `muteAudioOut(b)`, `isAudioOutMuted()`, energy computation and mic energies, `setParameter(si)`, `sendRemoteBufferToOutput(ir)`, `flushAudioOutputs()`, microphones recording. | On `subscribe(name)`, a task looks the service `name` up in the space and calls its `processRemote(nbOfChannels, nbOfSamplesByChannel, timestamp, buffer)` every buffer with 16-bit PCM sines: 4 channels × 8192 samples at 48 kHz by default (16 kHz and single channels honored, interleaved or not). It gives up with a warning after 30 consecutive failures. |
-| `ALTextToSpeech` | `say(s)`, `sayToFile(ss)`, `stopAll()`, `setLanguage(s)`, `getLanguage()`, `getAvailableLanguages()`, `setVolume(f)`, `getVolume()`, `setParameter(sf)`, `getParameter(s)`, `setVoice(s)`, `getVoice()`, `_history()`. | `say` records the utterance, logs it, sets `ALTextToSpeech/CurrentSentence` and raises `ALTextToSpeech/TextStarted`, `TextDone` and `Status`, taking a duration proportional to the text. |
+| `ALTextToSpeech` | `say(s)`, `sayToFile(ss)`, `stopAll()`, `setLanguage(s)`, `getLanguage()`, `getAvailableLanguages()`, `setVolume(f)`, `getVolume()`, `setParameter(sf)`, `getParameter(s)`, `setVoice(s)`, `getVoice()`, `_history()`. | `say` records the utterance, logs it, sets `ALTextToSpeech/CurrentSentence` (kept after the speech) and raises `ALTextToSpeech/TextStarted`, `TextDone` and `Status`, taking a duration proportional to the text. |
 | `ALDialog` | `setLanguage(s)`, `getLanguage()`, `loadTopicContent(s)->s`, `loadTopic(s)`, `unloadTopic(s)`, `activateTopic(s)`, `deactivateTopic(s)`, `subscribe(s)`, `unsubscribe(s)`, `setFocus(s)`, `getActivatedTopics()`, `getAllLoadedTopics()`, `getLoadedTopics(s)`, `forceInput(s)`, `_recognize(s)`. | Parses the `topic:`, `language:` and `u:(...) $var=$1` lines of QiChat topics; `forceInput` raises the variables of the matching rules with the input (the `listen` action of the driver works end to end). |
 | `ALSpeechRecognition` | `setVocabulary([s]b)`, `subscribe(s)`, `unsubscribe(s)`, `pause(b)`, `setLanguage(s)`, `getLanguage()`, `getAvailableLanguages()`, `setAudioExpression(b)`, `setVisualExpression(b)`, `isRunning()`, `_enableFreeSpeechToText()`, `_disableFreeSpeechToText()`, `_recognize(sf)`. | `_recognize` raises `SpeechDetected`, `WordRecognized` and `ALSpeechRecognition/Status` like a recognition would. |
 | `LogManager` | `getListener()->o`, `createListener()->o`, `log([LogMessage])`, `addProvider(o)`, `removeProvider(i)`. Listeners: signals `onLogMessage`, `onLogMessages`, `onLogMessagesWithBacklog`, property `logLevel`, methods `setLevel(i)`, `addFilter(si)`, `clearFilters()`, `setCategory(si)`, `clearAndSet({si})`. | Messages carry the `qicore` structure `(sisssIll)<LogMessage,source,level,category,location,message,id,date,systemDate>`. The simulator logs a heartbeat every 5 s and every notable action (say, subscriptions, moves, …). |
@@ -112,7 +118,7 @@ Touch sensors and bumpers are memory events (`FrontTactilTouched`, `MiddleTactil
   wheels are not modeled; the IMU, sonar, laser and force sensors hold constant values.
 - No real audio or video: images are synthetic patterns, audio buffers are sine waves, and
   nothing is heard: speech recognition and dialog inputs are triggered explicitly.
-- No TLS (`tcps://`) endpoints, no `ALNavigation`, `ALTabletService`, `ALBasicAwareness`,
+- No `ALNavigation`, `ALTabletService`, `ALBasicAwareness`,
   `ALAnimatedSpeech`, `ALPeoplePerception`, `PackageManager`, behaviors or Choregraphe boxes.
 - `ALMotion` computes Cartesian positions for `Torso`, `Head` and the cameras only.
 
@@ -121,6 +127,12 @@ Touch sensors and bumpers are memory events (`FrontTactilTouched`, `MiddleTactil
 ```sh
 cargo test -p naoqi-sim
 ```
+
+`interop/driver_smoke.cpp` is a C++ client built on the real `libqi` and `libqicore` (the
+`ros-naoqi` forks) that replays the calls of `naoqi_driver2` with its exact call forms and
+value accessors (`asListValuePtr().content()`, `as<std::string>()`, the typed
+`qi::LogListenerPtr` proxy, the `processRemote` audio callback…). Build it with
+`interop/build.sh` (see the variables at its top) and run it with the simulator's URL.
 
 The integration tests connect a `qi` client node to an in-process simulator and replay the
 startup contract of `naoqi_driver2` in order (for NAO and Pepper), check the `getImageRemote`

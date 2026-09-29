@@ -153,7 +153,7 @@ impl Simulator {
             version: version.clone(),
             name: config.name.clone(),
             memory,
-            body: body.clone(),
+            body: Arc::clone(&body),
             logs: logs.clone(),
             node: Arc::downgrade(&node),
         };

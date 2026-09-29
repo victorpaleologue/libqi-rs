@@ -209,12 +209,12 @@ pub fn object(context: &Context) -> AnyObject {
     )| {
         let mut position = body.torso_position(frame);
         match name.as_str() {
-            "Torso" => Ok(position),
+            "Torso" => Ok(position.to_vec()),
             "Head" | "CameraTop" | "CameraBottom" => {
                 if frame != frame::TORSO {
                     position[2] += 0.16;
                 }
-                Ok(position)
+                Ok(position.to_vec())
             }
             _ => Err(error(format!(
                 "ALMotion::getPosition\n\tunknown name: {name}"

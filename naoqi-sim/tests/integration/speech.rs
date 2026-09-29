@@ -44,14 +44,9 @@ async fn say_records_and_raises_events() {
             .as_str(),
         Some("Hello world")
     );
-    assert_eq!(
-        timeout(TIMEOUT, sentences.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .as_str(),
-        Some("")
-    );
+    // The last sentence stays readable once said.
+    let current: String = fixture.get_data("ALTextToSpeech/CurrentSentence").await;
+    assert_eq!(current, "Hello world");
 
     // Posting works too (the driver uses async<void>("say", ...)).
     tts.post("say", "Second".to_owned()).await;

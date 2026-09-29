@@ -1,7 +1,8 @@
 //! `ALTextToSpeech`: the speech synthesis engine.
 //!
-//! Utterances are recorded, logged, published as the `ALTextToSpeech/CurrentSentence` key and
-//! surrounded by the `ALTextToSpeech/TextStarted` and `ALTextToSpeech/TextDone` events.
+//! Utterances are recorded, logged, published as the `ALTextToSpeech/CurrentSentence` key (which
+//! keeps the last sentence once said, so that it can be read back) and surrounded by the
+//! `ALTextToSpeech/TextStarted` and `ALTextToSpeech/TextDone` events.
 
 use super::Context;
 use crate::{alvalue::AlValue, error, lock};
@@ -117,7 +118,6 @@ impl TextToSpeech {
             "ALTextToSpeech/Status",
             AlValue::list([id.into(), "done".into()]),
         );
-        memory.insert("ALTextToSpeech/CurrentSentence", "");
         memory.raise("ALTextToSpeech/TextDone", 0);
         result
     }

@@ -311,10 +311,11 @@ impl RobotDescription {
             "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<ModulePreference schemaLocation=\"ModulePreference.xsd\" xmlns=\"http://www.aldebaran-robotics.com/schema/ModulePreference\">\n",
         );
         for (key, value) in self.config_map() {
-            let _ = writeln!(
+            writeln!(
                 xml,
                 "  <Preference memoryName=\"{key}\" description=\"\" value=\"{value}\" type=\"string\" />"
-            );
+            )
+            .ok();
         }
         xml.push_str("</ModulePreference>\n");
         xml

@@ -3,7 +3,7 @@
 #![deny(unreachable_pub, unsafe_code)]
 #![warn(clippy::all, clippy::print_stderr)]
 
-use anyhow::{bail, Context as _};
+use anyhow::Context as _;
 use clap::Parser;
 use naoqi_sim::{Config, RobotModel, Script, Simulator};
 use qi::Address;
@@ -28,8 +28,10 @@ struct Args {
     #[arg(long, default_value = "naoqi-sim")]
     name: String,
 
-    /// An address to listen on; may be repeated.
-    #[arg(long = "listen", default_value = "tcp://0.0.0.0:9559")]
+    /// An address to listen on; may be repeated. Defaults to tcp://0.0.0.0:9559, plus
+    /// tcps://0.0.0.0:9503 (TLS, the port NAOqi 2.9 clients use with a password) when a
+    /// password is set.
+    #[arg(long = "listen")]
     listen: Vec<Address>,
 
     /// The password of the "nao" user. Without it, every connection is accepted.
@@ -81,6 +83,15 @@ async fn read_script(path: &PathBuf) -> anyhow::Result<Script> {
     text.parse().context("invalid script")
 }
 
+/// The default addresses: the NAOqi ports, TLS only when a password protects the robot.
+fn default_listen(with_password: bool) -> anyhow::Result<Vec<Address>> {
+    let mut addresses = vec!["tcp://0.0.0.0:9559".parse::<Address>()?];
+    if with_password {
+        addresses.push("tcps://0.0.0.0:9503".parse::<Address>()?);
+    }
+    Ok(addresses)
+}
+
 #[allow(clippy::print_stdout)]
 fn announce(simulator: &Simulator) {
     for endpoint in simulator.endpoints() {
@@ -97,16 +108,18 @@ fn announce(simulator: &Simulator) {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     init_tracing(args.verbose);
-    if args.listen.is_empty() {
-        bail!("at least one --listen address is required");
-    }
+    let listen = if args.listen.is_empty() {
+        default_listen(args.password.is_some())?
+    } else {
+        args.listen
+    };
     let script = match &args.script {
         Some(path) => Some(read_script(path).await?),
         None => None,
     };
     let mut config = Config::new(args.robot)
         .with_name(args.name)
-        .listen_on(args.listen);
+        .listen_on(listen);
     if let Some(version) = args.version {
         config = config.with_version(version);
     }
