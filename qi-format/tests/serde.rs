@@ -533,7 +533,7 @@ fn list_of_dynamics_round_trips_as_dynamic_elements() {
     let bytes = qi_format::to_bytes(&Dynamic(list.clone())).unwrap();
     // Signature "[m]", then two elements each written as signature "f" + value.
     assert_eq!(
-        bytes,
+        bytes.as_ref(),
         [
             3, 0, 0, 0, b'[', b'm', b']', 2, 0, 0, 0, 1, 0, 0, 0, b'f', 0, 0, 0xc0, 0x3f, 1, 0, 0,
             0, b'f', 0, 0, 0x20, 0x40
