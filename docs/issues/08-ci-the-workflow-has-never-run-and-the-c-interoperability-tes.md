@@ -5,7 +5,7 @@ labels: enhancement
 
 ## State
 
-`.github/workflows/ci.yml` runs fmt, clippy, `cargo test --workspace`, rustdoc with warnings denied, and `cargo check` on the declared minimum Rust version (1.89). It was written in a container without access to GitHub Actions and has not run once: expect small fixes on the first run (cache keys, the MSRV pin, the toolchain action syntax).
+`.github/workflows/ci.yml` runs fmt, clippy, `cargo test --workspace`, rustdoc with warnings denied, and `cargo check` on the declared minimum Rust version (1.90). It was written in a container without access to GitHub Actions and has not run once: expect small fixes on the first run (cache keys, the MSRV pin, the toolchain action syntax).
 
 Two parts of the validation are not covered:
 

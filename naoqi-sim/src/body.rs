@@ -349,9 +349,7 @@ impl Body {
     pub fn wake_up(&self) {
         self.awake.store(true, Ordering::SeqCst);
         let count = self.description.joints.len();
-        for value in &mut lock(&self.state).stiffness {
-            *value = 1.0;
-        }
+        lock(&self.state).stiffness.fill(1.0);
         let _ = count;
         self.memory.insert("robotIsWakeUp", true);
     }
@@ -361,9 +359,7 @@ impl Body {
         self.awake.store(false, Ordering::SeqCst);
         {
             let mut state = lock(&self.state);
-            for value in &mut state.stiffness {
-                *value = 0.0;
-            }
+            state.stiffness.fill(0.0);
             state.velocity = [0.0; 3];
             state.move_target = None;
         }

@@ -14,10 +14,10 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-authors = ["Vincent PALANCHER"]
+authors = ["Victor Paleologue <victor.paleologue@palaio.eu>", "Vincent Palancher"]
 version = "0.1.0"
-license-file = "LICENSE.txt"
-rust-version = "1.89"
+license = "BSD-3-Clause"
+rust-version = "1.90"
 repository = "https://github.com/victorpaleologue/libqi-rs-vibe"
 homepage = "https://github.com/victorpaleologue/libqi-rs-vibe"
 keywords = ["naoqi", "libqi", "robotics", "rpc", "pepper"]

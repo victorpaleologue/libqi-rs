@@ -352,11 +352,11 @@ impl Uid {
 
 impl std::fmt::Display for Uid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, bytes) in self.0.chunks_exact(4).enumerate() {
+        for (i, bytes) in self.0.as_chunks::<4>().0.iter().enumerate() {
             if i > 0 {
                 write!(f, "-")?;
             }
-            let dword = u32::from_be_bytes(bytes.try_into().unwrap());
+            let dword = u32::from_be_bytes(*bytes);
             write!(f, "{dword:x}")?;
         }
         Ok(())

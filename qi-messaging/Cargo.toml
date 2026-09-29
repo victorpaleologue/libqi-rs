@@ -3,7 +3,7 @@ name = "qi-messaging"
 description = "The qi messaging protocol: message framing, TCP and TLS channels, client and server loops"
 
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 authors.workspace = true
 version.workspace = true
 rust-version.workspace = true

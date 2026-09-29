@@ -14,6 +14,8 @@ Every crate of the workspace (`libqi`, `qi-value`, `qi-format`, `qi-messaging`, 
 First release of libqi-rs-vibe, a fork of [libqi-rs](https://github.com/nyibbang/libqi-rs)
 completed into a stack that interoperates with `libqi` 4.0.5 processes and NAOqi robots.
 
+The crates require Rust 1.90 or later and are licensed under the BSD 3-Clause license.
+
 ### Added
 
 - `libqi` (used as `qi`): nodes, sessions, services, objects, signals, properties, object
