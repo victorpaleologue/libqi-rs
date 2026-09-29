@@ -1,6 +1,6 @@
 [package]
 name = "qi-tools"
-description = ""
+description = "Command-line tools for `qi` spaces: the `qi-cli` command"
 
 edition.workspace = true
 license-file.workspace = true
@@ -10,12 +10,20 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = "0.23.1"
 clap = { workspace = true }
 colored = { workspace = true }
+futures = { workspace = true }
 qi = { path = "../qi" }
-tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "signal", "time"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [[bin]]
 name = "qi-cli"
+path = "src/main.rs"
