@@ -15,7 +15,7 @@
 
 use crate::{
     object::{params, ActionNameOrId, AnyObject, Object},
-    value::{FromValue, IntoValue, Reflect, RuntimeReflect, Type, Value},
+    value::{FromValue, IntoValue, Reflect, Type, Value},
     Result,
 };
 use futures::{stream::BoxStream, Stream, StreamExt};
@@ -247,8 +247,7 @@ where
         + 'static
         + IntoValue<'static>
         + FromValue<'static>
-        + Reflect
-        + RuntimeReflect,
+        + Reflect,
 {
     /// Emits a value to all subscribers.
     ///

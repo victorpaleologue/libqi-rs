@@ -24,7 +24,7 @@ use crate::{
     },
     property::Property,
     signal::{Signal, ValueStream},
-    value::{FromValue, IntoValue, Reflect, RuntimeReflect, Value},
+    value::{FromValue, IntoValue, Reflect, Value},
     Error, Object, Result,
 };
 use async_trait::async_trait;
@@ -48,8 +48,7 @@ where
         + 'static
         + IntoValue<'static>
         + FromValue<'static>
-        + Reflect
-        + RuntimeReflect,
+        + Reflect,
 {
     fn erased_subscribe(&self) -> BoxFuture<'_, Result<ValueStream>> {
         Box::pin(self.subscribe_erased())
@@ -75,8 +74,7 @@ where
         + 'static
         + IntoValue<'static>
         + FromValue<'static>
-        + Reflect
-        + RuntimeReflect,
+        + Reflect,
 {
     fn erased_get(&self) -> BoxFuture<'_, Result<Value<'static>>> {
         Box::pin(self.get_erased())
@@ -195,8 +193,7 @@ impl ObjectBuilder {
             + 'static
             + IntoValue<'static>
             + FromValue<'static>
-            + Reflect
-            + RuntimeReflect,
+            + Reflect,
     {
         let id = self.next_id();
         self.add_signal_with_id(id, name, signal);
@@ -217,8 +214,7 @@ impl ObjectBuilder {
             + 'static
             + IntoValue<'static>
             + FromValue<'static>
-            + Reflect
-            + RuntimeReflect,
+            + Reflect,
     {
         self.meta.signals.insert(
             id,
@@ -241,8 +237,7 @@ impl ObjectBuilder {
             + 'static
             + IntoValue<'static>
             + FromValue<'static>
-            + Reflect
-            + RuntimeReflect,
+            + Reflect,
     {
         let id = self.next_id();
         self.add_property_with_id(id, name, property);
@@ -263,8 +258,7 @@ impl ObjectBuilder {
             + 'static
             + IntoValue<'static>
             + FromValue<'static>
-            + Reflect
-            + RuntimeReflect,
+            + Reflect,
     {
         let name = name.into();
         // Properties are also signals of their changes.

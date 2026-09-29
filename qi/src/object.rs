@@ -537,8 +537,7 @@ impl ObjectClient {
             + 'static
             + IntoValue<'static>
             + FromValue<'static>
-            + Reflect
-            + RuntimeReflect,
+            + Reflect,
     {
         let id = self.property_id(&ident.into())?;
         Ok(Property::of_object(AnyObject::new(self.clone()), id.into()))

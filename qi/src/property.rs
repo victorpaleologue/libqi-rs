@@ -11,7 +11,7 @@ use crate::{
     error::ValueConversionError,
     object::{ActionNameOrId, AnyObject, Object},
     signal::{Signal, Subscription, ValueStream},
-    value::{self, FromValue, IntoValue, Reflect, RuntimeReflect, Value},
+    value::{self, FromValue, IntoValue, Reflect, Value},
     Result,
 };
 use std::sync::{Arc, RwLock};
@@ -57,8 +57,7 @@ where
         + 'static
         + IntoValue<'static>
         + FromValue<'static>
-        + Reflect
-        + RuntimeReflect,
+        + Reflect,
 {
     /// Creates a local property with an initial value.
     pub fn new(value: T) -> Self {
@@ -172,8 +171,7 @@ where
         + 'static
         + IntoValue<'static>
         + FromValue<'static>
-        + Reflect
-        + RuntimeReflect,
+        + Reflect,
 {
     fn default() -> Self {
         Self::new(T::default())
