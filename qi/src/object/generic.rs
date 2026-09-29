@@ -105,7 +105,7 @@ pub(crate) fn merge(meta: &MetaObject) -> MetaObject {
     let generic = meta_object();
     let mut merged = meta.clone();
     for (id, method) in generic.methods.iter() {
-        if merged.methods.get(id).is_none() {
+        if !merged.methods.contains_key(id) {
             merged.methods.insert(*id, method.clone());
         }
     }

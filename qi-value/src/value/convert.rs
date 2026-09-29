@@ -9,88 +9,76 @@ use super::{FromValueError, Value};
 use crate::{map::Map, Type};
 use ordered_float::OrderedFloat;
 
-impl<'a> Value<'a> {
-    /// Converts the value to the given type, `None` standing for the dynamic type.
-    ///
-    /// The rules follow the reference implementation:
-    ///
-    /// - a dynamic target wraps the value into a dynamic value, unless it is one already;
-    /// - a dynamic value is unwrapped, and its content converted to the target;
-    /// - numbers convert to any numeric type in which they are representable;
-    /// - lists and tuples convert elementwise to lists, and to tuples of the same length; maps
-    ///   convert elementwise; optionals convert elementwise, and a value converts to an optional
-    ///   holding it;
-    /// - any other value must already be of the target type.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FromValueError::TypeMismatch`] when the value cannot be converted.
-    pub fn convert_to(self, ty: Option<&Type>) -> Result<Value<'a>, FromValueError> {
-        let Some(ty) = ty else {
-            return Ok(match self {
-                dynamic @ Value::Dynamic(_) => dynamic,
-                value => value.into_dynamic(),
-            });
-        };
-        match (ty, self) {
-            (_, Value::Dynamic(inner)) => inner.convert_to(Some(ty)),
-            (Type::Unit, Value::Unit) => Ok(Value::Unit),
-            (Type::Bool, value @ Value::Bool(_)) => Ok(value),
-            (
-                Type::Int8
-                | Type::UInt8
-                | Type::Int16
-                | Type::UInt16
-                | Type::Int32
-                | Type::UInt32
-                | Type::Int64
-                | Type::UInt64
-                | Type::Float32
-                | Type::Float64,
-                value,
-            ) => convert_number(ty, value),
-            (Type::String, value @ Value::String(_)) => Ok(value),
-            (Type::Raw, value @ Value::Raw(_)) => Ok(value),
-            (Type::Object, value @ Value::Object(_)) => Ok(value),
-            (Type::Option(inner), Value::Option(option)) => Ok(Value::Option(match option {
-                Some(value) => Some(Box::new(value.convert_to(inner.as_deref())?)),
-                None => None,
-            })),
-            (Type::Option(inner), value) => Ok(Value::Option(Some(Box::new(
-                value.convert_to(inner.as_deref())?,
-            )))),
-            (
-                Type::List(element) | Type::VarArgs(element),
-                Value::List(items) | Value::Tuple(items),
-            ) => items
-                .into_iter()
-                .map(|item| item.convert_to(element.as_deref()))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Value::List),
-            (Type::Map { key, value }, Value::Map(map)) => {
-                let mut converted = Map::with_capacity(map.len());
-                for (k, v) in map {
-                    converted.insert(
-                        k.convert_to(key.as_deref())?,
-                        v.convert_to(value.as_deref())?,
-                    );
-                }
-                Ok(Value::Map(converted))
+/// Converts the value to the given type, `None` standing for the dynamic type. See
+/// [`Value::convert_to`].
+pub(super) fn convert_to<'a>(
+    value: Value<'a>,
+    ty: Option<&Type>,
+) -> Result<Value<'a>, FromValueError> {
+    let Some(ty) = ty else {
+        return Ok(match value {
+            dynamic @ Value::Dynamic(_) => dynamic,
+            value => value.into_dynamic(),
+        });
+    };
+    match (ty, value) {
+        (_, Value::Dynamic(inner)) => inner.convert_to(Some(ty)),
+        (Type::Unit, Value::Unit) => Ok(Value::Unit),
+        (Type::Bool, value @ Value::Bool(_)) => Ok(value),
+        (
+            Type::Int8
+            | Type::UInt8
+            | Type::Int16
+            | Type::UInt16
+            | Type::Int32
+            | Type::UInt32
+            | Type::Int64
+            | Type::UInt64
+            | Type::Float32
+            | Type::Float64,
+            value,
+        ) => convert_number(ty, value),
+        (Type::String, value @ Value::String(_)) => Ok(value),
+        (Type::Raw, value @ Value::Raw(_)) => Ok(value),
+        (Type::Object, value @ Value::Object(_)) => Ok(value),
+        (Type::Option(inner), Value::Option(option)) => Ok(Value::Option(match option {
+            Some(value) => Some(Box::new(value.convert_to(inner.as_deref())?)),
+            None => None,
+        })),
+        (Type::Option(inner), value) => Ok(Value::Option(Some(Box::new(
+            value.convert_to(inner.as_deref())?,
+        )))),
+        (
+            Type::List(element) | Type::VarArgs(element),
+            Value::List(items) | Value::Tuple(items),
+        ) => items
+            .into_iter()
+            .map(|item| item.convert_to(element.as_deref()))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::List),
+        (Type::Map { key, value }, Value::Map(map)) => {
+            let mut converted = Map::with_capacity(map.len());
+            for (k, v) in map {
+                converted.insert(
+                    k.convert_to(key.as_deref())?,
+                    v.convert_to(value.as_deref())?,
+                );
             }
-            (Type::Tuple(tuple), Value::Tuple(items) | Value::List(items)) => {
-                let types = tuple.element_types();
-                if types.len() != items.len() {
-                    return Err(mismatch(ty, &Value::Tuple(items)));
-                }
-                items
-                    .into_iter()
-                    .zip(types)
-                    .map(|(item, ty)| item.convert_to(ty.as_ref()))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map(Value::Tuple)
-            }
-            (_, value) => Err(mismatch(ty, &value)),
+            Ok(Value::Map(converted))
         }
+        (Type::Tuple(tuple), Value::Tuple(items) | Value::List(items)) => {
+            let types = tuple.element_types();
+            if types.len() != items.len() {
+                return Err(mismatch(ty, &Value::Tuple(items)));
+            }
+            items
+                .into_iter()
+                .zip(types)
+                .map(|(item, ty)| item.convert_to(ty.as_ref()))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::Tuple)
+        }
+        (_, value) => Err(mismatch(ty, &value)),
     }
 }
 

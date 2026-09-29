@@ -69,6 +69,25 @@ impl<'a> Value<'a> {
         Self::Dynamic(Box::new(self))
     }
 
+    /// Converts the value to the given type, `None` standing for the dynamic type.
+    ///
+    /// The rules follow the reference implementation:
+    ///
+    /// - a dynamic target wraps the value into a dynamic value, unless it is one already;
+    /// - a dynamic value is unwrapped, and its content converted to the target;
+    /// - numbers convert to any numeric type in which they are representable;
+    /// - lists and tuples convert elementwise to lists, and to tuples of the same length; maps
+    ///   convert elementwise; optionals convert elementwise, and a value converts to an optional
+    ///   holding it;
+    /// - any other value must already be of the target type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FromValueError::TypeMismatch`] when the value cannot be converted.
+    pub fn convert_to(self, ty: Option<&Type>) -> Result<Value<'a>, FromValueError> {
+        convert::convert_to(self, ty)
+    }
+
     pub fn into_owned(self) -> Value<'static> {
         match self {
             Self::Unit => Value::Unit,
