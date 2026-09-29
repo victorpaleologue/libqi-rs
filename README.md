@@ -60,6 +60,23 @@ Implemented and tested against `libqi` 4.0.5:
 Not implemented yet: mutual TLS authentication (`tcpsm://`), the `Manageable` statistics
 and tracing members, and gateways.
 
+## Tools
+
+`qi-cli` inspects and drives any `qi` space, a robot included:
+
+```sh
+cargo run -p qi-tools --bin qi-cli -- --url tcp://nao.local:9559 info ALTextToSpeech
+cargo run -p qi-tools --bin qi-cli -- --url tcp://nao.local:9559 call ALTextToSpeech.say "Hello"
+cargo run -p qi-tools --bin qi-cli -- --url tcp://nao.local:9559 call ALMemory.getData Device/SubDeviceList/Battery/Charge/Sensor/Value
+```
+
+`naoqi-sim` runs a simulated NAO or Pepper that `libqi` clients (the ROS 2 `naoqi_driver2`
+included) connect to as to a real robot:
+
+```sh
+cargo run -p naoqi-sim -- --robot nao --listen tcp://0.0.0.0:9559
+```
+
 ## Building and testing
 
 ```sh
