@@ -154,7 +154,7 @@ A *space* is a set of processes sharing a service directory. A `Node` either *ho
 a space (it runs the service directory as service 1, object 1, with the
 `serviceAdded`/`serviceRemoved` signals and the relative `qi:ServiceName` endpoints
 of `libqi`) or *connects* to one. Nodes bind servers on the addresses they are given
-(`tcp://host:port`, port 0 for an ephemeral port), publish their services (at start
+(`tcp://host:port` or `tcps://host:port`, port 0 for an ephemeral port), publish their services (at start
 or later with `register_service`), and resolve the services of the space through the
 directory, reusing one session per peer node. Local services are returned directly,
 without a network round trip.
@@ -175,8 +175,10 @@ harness is not built).
 
 ## Known limitations
 
-- TLS transports (`tcps://`) are not implemented: connecting to a robot requires the
-  plain TCP port (9559) or a TLS terminator.
+- Mutual TLS authentication (`tcpsm://`) is not implemented. Plain TLS (`tcps://`, the
+  transport of NAOqi 2.9 robots on port 9503) follows `libqi`: peers do not verify each
+  other's certificates, and servers use a self-signed certificate unless the
+  `QI_TLS_CERTIFICATE` and `QI_TLS_PRIVATE_KEY` environment variables name PEM files.
 - `Value` has no structure annotations: a structure passed *inside a dynamic value*
   through the dynamic representation loses its `<Name,fields>` annotation (statically
   typed structures keep it). `libqi` accepts both.

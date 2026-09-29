@@ -16,10 +16,14 @@ either = { workspace = true }
 futures= { workspace = true }
 qi-value = { path = "../qi-value" }
 qi-format = { path = "../qi-format" }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
 tokio-util = { workspace = true, features = ["rt"] }
+tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

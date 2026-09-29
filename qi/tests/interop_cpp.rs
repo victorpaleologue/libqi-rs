@@ -673,3 +673,18 @@ async fn cpp_service_on_rust_service_directory_serves_rust_client() {
     let client = connect_node(sd_address).await;
     run_rust_client_scenarios(&client, &mut cpp_service).await;
 }
+
+#[tokio::test]
+async fn cpp_client_over_tls_against_rust_node() {
+    let harness = harness_or_skip!();
+    let service = TestService::new();
+    let mut init = node::init();
+    init.add_service_object(SERVICE_NAME, service.object());
+    init.bind("tcps://127.0.0.1:0".parse().unwrap());
+    let host = init.host_space().start().await.unwrap();
+    let address = host_address(&host);
+    assert!(address.to_string().starts_with("tcps://"), "{address}");
+
+    harness.run_client_scenarios(&address).await;
+    assert_eq!(service.wait_ticks().await, [7]);
+}

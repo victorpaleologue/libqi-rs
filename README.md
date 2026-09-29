@@ -55,8 +55,10 @@ Implemented and tested against `libqi` 4.0.5:
 - callbacks in both NAOqi styles: object passing, and services calling back services
   registered by their clients.
 
-Not implemented yet: TLS transports (`tcps://`), the `Manageable` statistics and tracing
-members, and gateways.
+- TLS transports (`tcps://`, as used by NAOqi 2.9 robots) with `libqi`'s semantics.
+
+Not implemented yet: mutual TLS authentication (`tcpsm://`), the `Manageable` statistics
+and tracing members, and gateways.
 
 ## Building and testing
 

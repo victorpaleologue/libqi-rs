@@ -54,7 +54,9 @@ async fn main() -> qi::Result<()> {
 ```
 
 Credentials, when the robot requires them, are passed as the second argument of
-`connect_to_space` (`auth_user` and `auth_token` keys of a `KeyDynValueMap`).
+`connect_to_space` (`auth_user` and `auth_token` keys of a `KeyDynValueMap`). Robots
+running NAOqi 2.9 and later expose an authenticated TLS endpoint: use
+`tcps://<robot>:9503`.
 
 ## Publishing a service
 

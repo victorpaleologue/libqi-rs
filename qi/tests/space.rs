@@ -532,3 +532,32 @@ async fn services_call_back_services_registered_by_clients() {
         .unwrap();
     assert_eq!(received.lock().unwrap().as_slice(), [(2, 3, 1234, 12)]);
 }
+
+#[tokio::test]
+async fn nodes_communicate_over_tls() {
+    let (_calc, object) = Calculator::new();
+    let mut init = qi::node::init();
+    init.add_service_object("Calculator", object);
+    init.bind("tcps://127.0.0.1:0".parse().unwrap());
+    let host = init.host_space().start().await.expect("host a TLS space");
+    let address = host_address(&host);
+    assert!(address.to_string().starts_with("tcps://"), "{address}");
+
+    // The service directory advertises TLS endpoints, that the client node connects to.
+    let client = connect(address).await;
+    let calculator = client.service("Calculator").await.unwrap();
+    let sum: i32 = calculator.call("add", (20, 22)).await.unwrap();
+    assert_eq!(sum, 42);
+    let mut fired = calculator.subscribe::<_, i32>("fired").await.unwrap();
+    let () = calculator.call("fire", 7).await.unwrap();
+    assert_eq!(timeout(TIMEOUT, fired.next()).await.unwrap(), Some(7));
+
+    // A plain TCP client cannot talk to a TLS endpoint.
+    let Address::Tcp { address, .. } = address;
+    let plain = Address::Tcp { address, ssl: None };
+    assert!(node::init()
+        .connect_to_space(plain, None)
+        .start()
+        .await
+        .is_err());
+}
