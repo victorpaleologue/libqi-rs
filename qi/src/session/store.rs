@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 /// It creates new sessions that are associated with services and register them
 /// for further retrieval, enabling usage of service session targets.
 #[derive(Debug)]
-pub struct Store {
+pub(crate) struct Store {
     services: service::SharedServices,
 
     /// The list of existing sessions with the associated service name.
@@ -23,10 +23,9 @@ pub struct Store {
 
 impl Store {
     pub(crate) fn new(services: service::SharedServices) -> Self {
-        let sessions = Default::default();
         Self {
             services,
-            sessions: Arc::clone(&sessions),
+            sessions: Default::default(),
         }
     }
 
@@ -116,11 +115,14 @@ struct UnreachableServiceError(String, Vec<ConnectionError>);
 impl std::fmt::Display for UnreachableServiceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "could not reach service \"{}\", ", self.0)?;
-        if self.0.is_empty() {
+        if self.1.is_empty() {
             f.write_str("no connection was tried")
         } else {
             f.write_str("tried the following connections: [")?;
-            for error in &self.1 {
+            for (index, error) in self.1.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
                 write!(f, "{} => {}", error.address, error.source)?;
             }
             f.write_str("]")

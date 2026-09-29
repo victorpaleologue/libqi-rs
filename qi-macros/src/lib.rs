@@ -1,4 +1,5 @@
 #![allow(clippy::wrong_self_convention)]
+#[allow(dead_code)] // Being implemented; see `object` attribute below.
 mod object;
 mod value;
 
@@ -54,7 +55,7 @@ pub fn proc_macro_derive_from_value(input: TokenStream) -> TokenStream {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// # mod qi {
 /// #   pub(super) use qi_macros::{object, Valuable};
 /// # }

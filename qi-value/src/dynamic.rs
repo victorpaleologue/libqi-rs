@@ -1,6 +1,6 @@
 mod de;
 
-pub use self::de::deserialize;
+pub use self::de::{deserialize, deserialize_with};
 use crate::{reflect::RuntimeReflect, FromValue, IntoValue, Reflect, ToValue, Value};
 
 // TODO: Check if this is really necessary

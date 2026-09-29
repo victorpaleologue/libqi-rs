@@ -3,26 +3,29 @@ use crate::{
     message::{Address, Id},
     Message,
 };
-use bytes::Bytes;
 use futures::{
     stream::{FusedStream, FuturesUnordered},
     Stream, StreamExt, TryFuture,
 };
 use pin_project_lite::pin_project;
 use std::{
+    collections::HashMap,
     future::Future,
     pin::Pin,
-    task::{ready, Context, Poll, Waker},
+    task::{ready, Context, Poll},
 };
+use tokio_util::sync::CancellationToken;
 
 pub(super) struct CallFutures<F> {
     call_futures: FuturesUnordered<CallFuture<F>>,
+    cancel_tokens: HashMap<Id, CancellationToken>,
 }
 
 impl<F> Default for CallFutures<F> {
     fn default() -> Self {
         Self {
             call_futures: Default::default(),
+            cancel_tokens: Default::default(),
         }
     }
 }
@@ -36,15 +39,19 @@ impl<F> std::fmt::Debug for CallFutures<F> {
 }
 
 impl<F> CallFutures<F> {
-    pub(super) fn push(&mut self, id: Id, address: Address, future: F) {
-        self.call_futures.push(CallFuture::new(id, address, future));
+    pub(super) fn push(&mut self, id: Id, address: Address, cancel: CancellationToken, future: F) {
+        self.cancel_tokens.insert(id, cancel.clone());
+        self.call_futures
+            .push(CallFuture::new(id, address, cancel, future));
     }
 
+    /// Requests the cancellation of the call with the given identifier.
+    ///
+    /// Cancellation is cooperative: the future of the call is notified through its cancellation
+    /// token and keeps running until it terminates.
     pub(super) fn cancel(&mut self, id: &Id) {
-        for call_future in Pin::new(&mut self.call_futures).iter_pin_mut() {
-            if &call_future.id == id {
-                call_future.cancel()
-            }
+        if let Some(token) = self.cancel_tokens.get(id) {
+            token.cancel();
         }
     }
 }
@@ -56,7 +63,11 @@ where
     type Item = (Message, DispatchFlow);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.call_futures.poll_next_unpin(cx)
+        let item = ready!(self.call_futures.poll_next_unpin(cx));
+        if let Some((message, _)) = &item {
+            self.cancel_tokens.remove(&message.id());
+        }
+        Poll::Ready(item)
     }
 }
 
@@ -73,8 +84,16 @@ pin_project! {
     struct CallFuture<F> {
         id: Id,
         address: Address,
+        cancel: CancellationToken,
         #[pin]
-        state: CallFutureState<F>,
+        inner: F,
+    }
+
+    impl<F> PinnedDrop for CallFuture<F> {
+        fn drop(this: Pin<&mut Self>) {
+            // A call future dropped before completion (endpoint termination) is a canceled call.
+            this.cancel.cancel();
+        }
     }
 }
 
@@ -83,117 +102,59 @@ impl<F> std::fmt::Debug for CallFuture<F> {
         f.debug_struct("CallFuture")
             .field("id", &self.id)
             .field("address", &self.address)
-            .field("state", &self.state)
+            .field("canceled", &self.cancel.is_cancelled())
             .finish()
     }
 }
 
 impl<F> CallFuture<F> {
-    fn new(id: Id, address: Address, inner: F) -> Self {
+    fn new(id: Id, address: Address, cancel: CancellationToken, inner: F) -> Self {
         Self {
             id,
             address,
-            state: CallFutureState::Running { inner, waker: None },
-        }
-    }
-
-    fn cancel(self: Pin<&mut Self>) {
-        let mut this = self.project();
-        let mut state = this.state.as_mut().project();
-        if let CallResponseFutureStateProj::Running { ref mut waker, .. } = state {
-            if let Some(waker) = waker.take() {
-                waker.wake();
-            }
-            this.state.set(CallFutureState::Canceled);
+            cancel,
+            inner,
         }
     }
 }
 
 impl<F> Future for CallFuture<F>
 where
-    F: TryFuture<Ok = Bytes>,
+    F: TryFuture<Ok = handler::Reply>,
     F::Error: handler::CallError,
 {
     type Output = (Message, DispatchFlow);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
-        use CallResponseFutureStateProj as State;
-        match this.state.as_mut().project() {
-            State::Running { inner, waker } => {
-                *waker = Some(cx.waker().clone());
-                let call_result = ready!(inner.try_poll(cx));
-                this.state.set(CallFutureState::Terminated);
-                match call_result {
-                    Ok(reply) => Poll::Ready((
-                        Message::Reply {
-                            id: *this.id,
-                            address: *this.address,
-                            payload: reply,
-                        },
-                        DispatchFlow::Continue,
-                    )),
-                    Err(error) => {
-                        let message_stop_pair = if error.is_canceled() {
-                            (
-                                Message::Canceled {
-                                    id: *this.id,
-                                    address: *this.address,
-                                },
-                                DispatchFlow::Continue,
-                            )
-                        } else {
-                            (
-                                Message::Error {
-                                    id: *this.id,
-                                    address: *this.address,
-                                    error: error.to_string(),
-                                },
-                                if error.is_fatal() {
-                                    DispatchFlow::Stop
-                                } else {
-                                    DispatchFlow::Continue
-                                },
-                            )
-                        };
-                        Poll::Ready(message_stop_pair)
-                    }
-                }
+        let this = self.project();
+        let call_result = ready!(this.inner.try_poll(cx));
+        let (id, address) = (*this.id, *this.address);
+        Poll::Ready(match call_result {
+            Ok(handler::Reply { payload, flags }) => (
+                Message::Reply {
+                    id,
+                    address,
+                    payload,
+                    flags,
+                },
+                DispatchFlow::Continue,
+            ),
+            Err(error) if error.is_canceled() => {
+                (Message::Canceled { id, address }, DispatchFlow::Continue)
             }
-            State::Canceled => {
-                this.state.set(CallFutureState::Terminated);
-                Poll::Ready((
-                    Message::Canceled {
-                        id: *this.id,
-                        address: *this.address,
-                    },
-                    DispatchFlow::Continue,
-                ))
-            }
-            State::Terminated => {
-                debug_assert!(false, "polling a terminated future");
-                Poll::Pending
-            }
-        }
-    }
-}
-
-pin_project! {
-    #[project = CallResponseFutureStateProj]
-    enum CallFutureState<F> {
-        Running { #[pin] inner: F, waker: Option<Waker> },
-        Canceled,
-        Terminated,
-    }
-}
-
-impl<F> std::fmt::Debug for CallFutureState<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Running { waker, .. } => f.debug_struct("Running").field("waker", waker).finish(),
-            Self::Canceled => write!(f, "Canceled"),
-            Self::Terminated => write!(f, "Terminated"),
-        }
+            Err(error) => (
+                Message::Error {
+                    id,
+                    address,
+                    error: error.to_string(),
+                },
+                if error.is_fatal() {
+                    DispatchFlow::Stop
+                } else {
+                    DispatchFlow::Continue
+                },
+            ),
+        })
     }
 }
 

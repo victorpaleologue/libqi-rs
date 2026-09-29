@@ -13,7 +13,17 @@ where
     }
 }
 
-pub(crate) struct DynamicVisitor;
+pub(crate) struct DynamicVisitor {
+    object_uid_on_wire: bool,
+}
+
+impl Default for DynamicVisitor {
+    fn default() -> Self {
+        Self {
+            object_uid_on_wire: true,
+        }
+    }
+}
 
 impl<'de> serde::de::Visitor<'de> for DynamicVisitor {
     type Value = Value<'de>;
@@ -36,7 +46,10 @@ impl<'de> serde::de::Visitor<'de> for DynamicVisitor {
 
         // Value
         let value = seq
-            .next_element_seed(ValueType(value_type.as_ref()))?
+            .next_element_seed(
+                ValueType::new(value_type.as_ref())
+                    .with_object_uid_on_wire(self.object_uid_on_wire),
+            )?
             .ok_or_else(|| Error::invalid_length(1, &self))?;
 
         Ok(value)
@@ -60,7 +73,10 @@ impl<'de> serde::de::Visitor<'de> for DynamicVisitor {
         }?;
         let value_type = signature.into_type();
         let value = match map.next_key()? {
-            Some(Field::Value) => map.next_value_seed(ValueType(value_type.as_ref())),
+            Some(Field::Value) => map.next_value_seed(
+                ValueType::new(value_type.as_ref())
+                    .with_object_uid_on_wire(self.object_uid_on_wire),
+            ),
             _ => Err(Error::missing_field("value")),
         }?;
         Ok(value)
@@ -92,7 +108,23 @@ fn deserialize_value<'de, D>(deserializer: D) -> Result<Value<'de>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    deserializer.deserialize_struct(SERDE_STRUCT_NAME, &Fields::KEYS, DynamicVisitor)
+    deserializer.deserialize_struct(SERDE_STRUCT_NAME, &Fields::KEYS, DynamicVisitor::default())
+}
+
+/// Deserializes a dynamic value, specifying whether object references it may contain carry the
+/// object UID.
+pub fn deserialize_with<'de, D>(
+    deserializer: D,
+    object_uid_on_wire: bool,
+) -> Result<Value<'de>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_struct(
+        SERDE_STRUCT_NAME,
+        &Fields::KEYS,
+        DynamicVisitor { object_uid_on_wire },
+    )
 }
 
 pub fn deserialize<'de, T, D>(deserializer: D) -> Result<T, D::Error>

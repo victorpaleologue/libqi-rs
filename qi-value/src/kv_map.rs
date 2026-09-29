@@ -94,7 +94,7 @@ impl<'a> IntoValue<'a> for KeyDynValueMap {
     fn into_value(self) -> Value<'a> {
         Value::Map(
             self.into_iter()
-                .map(|(k, v)| (k.into_value(), v.into_value()))
+                .map(|(k, v)| (k.into_value(), v.into_dynamic()))
                 .collect(),
         )
     }
@@ -105,7 +105,13 @@ impl<'a> FromValue<'a> for KeyDynValueMap {
         match value {
             Value::Map(map) => map
                 .into_iter()
-                .map(|(k, v)| Ok((k.cast_into()?, v.into_owned())))
+                .map(|(k, v)| {
+                    let v = match v {
+                        Value::Dynamic(v) => *v,
+                        v => v,
+                    };
+                    Ok((k.cast_into()?, v.into_owned()))
+                })
                 .collect(),
             _ => Err(FromValueError::TypeMismatch {
                 expected: "a KeyDynValueMap".to_owned(),

@@ -1,9 +1,10 @@
 use super::Value;
 use crate::{
     dynamic::{self},
+    object::ObjectSeed,
     ty::{self, DisplayOption, DisplayTuple},
     value::String,
-    IntoValue, Map, Object, Type,
+    IntoValue, Map, Type,
 };
 use serde::{de::DeserializeSeed, Deserialize};
 use serde_with::{Bytes, DeserializeAs};
@@ -27,8 +28,39 @@ impl<'de> serde_with::DeserializeAs<'de, Value<'static>> for Value<'_> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct ValueType<'t>(pub Option<&'t Type>);
+/// A deserialization seed of a value of a given type.
+///
+/// Deserializing a value requires knowing its type, as the `qi` format is not self-describing.
+/// The absence of type means the value is dynamic and carries its own signature.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ValueType<'t> {
+    ty: Option<&'t Type>,
+    object_uid_on_wire: bool,
+}
+
+impl<'t> ValueType<'t> {
+    /// Creates a seed for a value of the given type, expecting object references to carry the
+    /// object UID.
+    pub fn new(ty: Option<&'t Type>) -> Self {
+        Self {
+            ty,
+            object_uid_on_wire: true,
+        }
+    }
+
+    /// Sets whether object references are expected to carry the object UID.
+    pub fn with_object_uid_on_wire(mut self, on_wire: bool) -> Self {
+        self.object_uid_on_wire = on_wire;
+        self
+    }
+
+    fn of(&self, ty: Option<&'t Type>) -> Self {
+        Self {
+            ty,
+            object_uid_on_wire: self.object_uid_on_wire,
+        }
+    }
+}
 
 impl<'de> serde::de::DeserializeSeed<'de> for ValueType<'_> {
     type Value = Value<'de>;
@@ -38,6 +70,7 @@ impl<'de> serde::de::DeserializeSeed<'de> for ValueType<'_> {
         D: serde::Deserializer<'de>,
     {
         fn deserialize_tuple<'de, 't, D, I>(
+            seed: ValueType<'t>,
             deserializer: D,
             len: usize,
             iter: I,
@@ -46,12 +79,14 @@ impl<'de> serde::de::DeserializeSeed<'de> for ValueType<'_> {
             D: serde::Deserializer<'de>,
             I: IntoIterator<Item = Option<&'t Type>>,
         {
-            let tuple =
-                deserializer.deserialize_tuple(len, TupleVisitor::new(Vec::from_iter(iter)))?;
+            let tuple = deserializer.deserialize_tuple(
+                len,
+                TupleVisitor::new(iter.into_iter().map(|ty| seed.of(ty)).collect()),
+            )?;
             Ok(Value::Tuple(tuple))
         }
         use serde::Deserialize;
-        match self.0 {
+        match self.ty {
             Some(Type::Unit) => <()>::deserialize(deserializer).map(IntoValue::into_value),
             Some(Type::Bool) => bool::deserialize(deserializer).map(IntoValue::into_value),
             Some(Type::Int8) => i8::deserialize(deserializer).map(IntoValue::into_value),
@@ -66,34 +101,44 @@ impl<'de> serde::de::DeserializeSeed<'de> for ValueType<'_> {
             Some(Type::Float64) => f64::deserialize(deserializer).map(IntoValue::into_value),
             Some(Type::String) => String::deserialize(deserializer).map(Into::into),
             Some(Type::Raw) => Bytes::deserialize_as(deserializer).map(Value::Raw),
-            Some(Type::Object) => Object::deserialize(deserializer).map(IntoValue::into_value),
+            Some(Type::Object) => ObjectSeed {
+                uid_on_wire: self.object_uid_on_wire,
+            }
+            .deserialize(deserializer)
+            .map(IntoValue::into_value),
             Some(Type::Option(value)) => {
-                let opt = deserializer.deserialize_option(OptionVisitor::new(value.as_deref()))?;
+                let opt = deserializer
+                    .deserialize_option(OptionVisitor::new(self.of(value.as_deref())))?;
                 Ok(Value::Option(opt.map(Box::new)))
             }
             Some(Type::List(value) | Type::VarArgs(value)) => {
-                let list = deserializer.deserialize_seq(ListVisitor::new(value.as_deref()))?;
+                let list =
+                    deserializer.deserialize_seq(ListVisitor::new(self.of(value.as_deref())))?;
                 Ok(Value::List(list))
             }
             Some(Type::Map { key, value }) => {
-                let map = deserializer
-                    .deserialize_map(MapVisitor::new(key.as_deref(), value.as_deref()))?;
+                let map = deserializer.deserialize_map(MapVisitor::new(
+                    self.of(key.as_deref()),
+                    self.of(value.as_deref()),
+                ))?;
                 Ok(Value::Map(map))
             }
             Some(Type::Tuple(
                 ty::Tuple::Tuple(elements) | ty::Tuple::TupleStruct { elements, .. },
             )) => deserialize_tuple(
+                self,
                 deserializer,
                 elements.len(),
                 elements.iter().map(Option::as_ref),
             ),
             Some(Type::Tuple(ty::Tuple::Struct { fields, .. })) => deserialize_tuple(
+                self,
                 deserializer,
                 fields.len(),
                 fields.iter().map(|field| field.ty.as_ref()),
             ),
             None => {
-                let value = dynamic::deserialize(deserializer)?;
+                let value = dynamic::deserialize_with(deserializer, self.object_uid_on_wire)?;
                 Ok(Value::Dynamic(Box::new(value)))
             }
         }
@@ -299,10 +344,10 @@ impl<'de> serde::de::Visitor<'de> for AnyValueVisitor {
     }
 }
 
-struct OptionVisitor<'t>(Option<&'t Type>);
+struct OptionVisitor<'t>(ValueType<'t>);
 
 impl<'t> OptionVisitor<'t> {
-    fn new(value_type: Option<&'t Type>) -> Self {
+    fn new(value_type: ValueType<'t>) -> Self {
         Self(value_type)
     }
 }
@@ -311,14 +356,14 @@ impl<'de> serde::de::Visitor<'de> for OptionVisitor<'_> {
     type Value = Option<Value<'de>>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "an option of {}", DisplayOption(&self.0))
+        write!(formatter, "an option of {}", DisplayOption(&self.0.ty))
     }
 
     fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let value = ValueType(self.0).deserialize(deserializer)?;
+        let value = self.0.deserialize(deserializer)?;
         Ok(Some(value))
     }
 
@@ -330,10 +375,10 @@ impl<'de> serde::de::Visitor<'de> for OptionVisitor<'_> {
     }
 }
 
-struct ListVisitor<'t>(Option<&'t Type>);
+struct ListVisitor<'t>(ValueType<'t>);
 
 impl<'t> ListVisitor<'t> {
-    fn new(value_type: Option<&'t Type>) -> Self {
+    fn new(value_type: ValueType<'t>) -> Self {
         Self(value_type)
     }
 }
@@ -342,7 +387,7 @@ impl<'de> serde::de::Visitor<'de> for ListVisitor<'_> {
     type Value = Vec<Value<'de>>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "a list of {}", DisplayOption(&self.0))
+        write!(formatter, "a list of {}", DisplayOption(&self.0.ty))
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
@@ -350,7 +395,7 @@ impl<'de> serde::de::Visitor<'de> for ListVisitor<'_> {
         A: serde::de::SeqAccess<'de>,
     {
         let mut values = seq.size_hint().map(Vec::with_capacity).unwrap_or_default();
-        while let Some(value) = seq.next_element_seed(ValueType(self.0))? {
+        while let Some(value) = seq.next_element_seed(self.0)? {
             values.push(value);
         }
         Ok(values)
@@ -358,12 +403,12 @@ impl<'de> serde::de::Visitor<'de> for ListVisitor<'_> {
 }
 
 struct MapVisitor<'t> {
-    key_type: Option<&'t Type>,
-    value_type: Option<&'t Type>,
+    key_type: ValueType<'t>,
+    value_type: ValueType<'t>,
 }
 
 impl<'t> MapVisitor<'t> {
-    fn new(key_type: Option<&'t Type>, value_type: Option<&'t Type>) -> Self {
+    fn new(key_type: ValueType<'t>, value_type: ValueType<'t>) -> Self {
         Self {
             key_type,
             value_type,
@@ -378,8 +423,8 @@ impl<'de> serde::de::Visitor<'de> for MapVisitor<'_> {
         write!(
             formatter,
             "a map of {} to {}",
-            DisplayOption(&self.key_type),
-            DisplayOption(&self.value_type)
+            DisplayOption(&self.key_type.ty),
+            DisplayOption(&self.value_type.ty)
         )
     }
 
@@ -388,19 +433,17 @@ impl<'de> serde::de::Visitor<'de> for MapVisitor<'_> {
         A: serde::de::MapAccess<'de>,
     {
         let mut values = map.size_hint().map(Map::with_capacity).unwrap_or_default();
-        while let Some((key, value)) =
-            map.next_entry_seed(ValueType(self.key_type), ValueType(self.value_type))?
-        {
+        while let Some((key, value)) = map.next_entry_seed(self.key_type, self.value_type)? {
             values.insert(key, value);
         }
         Ok(values)
     }
 }
 
-struct TupleVisitor<'t>(Vec<Option<&'t Type>>);
+struct TupleVisitor<'t>(Vec<ValueType<'t>>);
 
 impl<'t> TupleVisitor<'t> {
-    fn new(element_types: Vec<Option<&'t Type>>) -> Self {
+    fn new(element_types: Vec<ValueType<'t>>) -> Self {
         Self(element_types)
     }
 }
@@ -409,7 +452,8 @@ impl<'de> serde::de::Visitor<'de> for TupleVisitor<'_> {
     type Value = Vec<Value<'de>>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "a tuple of {}", DisplayTuple(&self.0))
+        let types: Vec<_> = self.0.iter().map(|seed| seed.ty).collect();
+        write!(formatter, "a tuple of {}", DisplayTuple(&types))
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
@@ -426,7 +470,7 @@ impl<'de> serde::de::Visitor<'de> for TupleVisitor<'_> {
                 None => break Ok(values),
             };
             let value = seq
-                .next_element_seed(ValueType(*element_type))?
+                .next_element_seed(*element_type)?
                 .ok_or_else(|| A::Error::invalid_length(index, &self))?;
             values.push(value);
         }

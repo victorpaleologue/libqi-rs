@@ -1,17 +1,23 @@
-use super::capabilities;
+//! The control protocol of sessions: authentication and capabilities negotiation.
+//!
+//! Control messages are addressed to the server object (service 0, object 0). The only control
+//! call is the authentication call (action 8), which a connecting peer must send first. Its
+//! arguments are a map of the capabilities of the peer and of its credentials; the reply is a map
+//! of the capabilities of the accepting peer and of the authentication state.
+
+use super::capabilities::{self, Capabilities};
 use crate::{
     auth::{self, Authenticator},
     error::{HandlerError, NoHandlerError},
-    messaging, object, service,
+    messaging::{self, handler, message, CancellationToken},
+    object, service,
     value::{FormatInto, IntoFormat, KeyDynValueMap},
     Error,
 };
-use bytes::Bytes;
 use futures::{
     future::{err, ready},
     FutureExt, TryFutureExt,
 };
-use messaging::message;
 use std::{future::Future, sync::Arc};
 use tokio::sync::watch;
 
@@ -29,47 +35,60 @@ pub(crate) const AUTHENTICATE_ADDRESS: message::Address =
 #[derive(Clone)]
 pub(super) struct Controller {
     authenticator: Option<Arc<dyn Authenticator + Send + Sync>>,
-    capabilities: watch::Sender<Option<KeyDynValueMap>>,
+    capabilities: watch::Sender<Option<Capabilities>>,
     remote_authorized: watch::Sender<bool>,
 }
 
 impl Controller {
+    /// Handles an authentication request from the remote peer.
     fn authenticate(
         &self,
         request: KeyDynValueMap,
     ) -> Result<KeyDynValueMap, AuthenticateClientError> {
-        let shared_capabilities = capabilities::shared_with_local(&request);
-        capabilities::check_required(&shared_capabilities)?;
+        let shared = Capabilities::shared_with_remote_map(&request);
         if let Some(authenticator) = &self.authenticator {
             authenticator
                 .authenticate(request)
                 .map_err(AuthenticateClientError::AuthenticationVerification)?;
         }
-        self.capabilities
-            .send_replace(Some(shared_capabilities.clone()));
+        self.capabilities.send_replace(Some(shared));
         self.remote_authorized.send_replace(true);
-        Ok(auth::state_done_map(shared_capabilities))
+        // Like the reference implementation, the reply advertises the local capabilities, and the
+        // remote computes the shared ones.
+        Ok(auth::state_done_map(capabilities::local_map().clone()))
     }
 
+    /// Records the capabilities of a remote peer that advertised them without authenticating
+    /// (compatibility path).
+    fn set_remote_capabilities(&self, map: &KeyDynValueMap) {
+        if self.capabilities.borrow().is_none() {
+            self.capabilities
+                .send_replace(Some(Capabilities::shared_with_remote_map(map)));
+        }
+    }
+
+    /// Authenticates to the remote peer.
     pub(super) async fn authenticate_to_server(
         &self,
-        client: &mut messaging::Client,
+        client: &messaging::Client,
         parameters: KeyDynValueMap,
-    ) -> Result<(), Error> {
+    ) -> Result<Capabilities, Error> {
         // Reset the current capabilities
         self.capabilities.send_replace(None);
         let mut request = capabilities::local_map().clone();
         request.extend(parameters);
-        let mut shared_capabilities = client
-            .call(AUTHENTICATE_ADDRESS, request.into_format_args()?)
-            .await?
-            .into_reflect_return_value()?;
-        auth::extract_state_result(&mut shared_capabilities)
-            .map_err(AuthenticateToServerError::ResultState)?;
-        capabilities::check_required(&shared_capabilities)
-            .map_err(AuthenticateToServerError::UnexpectedServerCapabilityValue)?;
-        self.capabilities.send_replace(Some(shared_capabilities));
-        Ok(())
+        let reply = client
+            .call(
+                AUTHENTICATE_ADDRESS,
+                request.into_format_args()?,
+                message::Flags::NONE,
+            )
+            .await?;
+        let mut remote: KeyDynValueMap = reply.payload.to_reflect_args()?;
+        auth::extract_state_result(&mut remote).map_err(AuthenticateToServerError::ResultState)?;
+        let shared = Capabilities::shared_with_remote_map(&remote);
+        self.capabilities.send_replace(Some(shared));
+        Ok(shared)
     }
 }
 
@@ -84,19 +103,23 @@ impl std::fmt::Debug for Controller {
 
 pub(super) struct Control<H> {
     pub(super) controller: Controller,
-    pub(super) capabilities: watch::Receiver<Option<KeyDynValueMap>>,
-    pub(super) remote_authorized: watch::Receiver<bool>,
+    pub(super) capabilities: watch::Receiver<Option<Capabilities>>,
     pub(super) handler: ControlledHandler<H>,
 }
 
-// TODO: Split this between server and client
+/// Creates the control of a session over a handler.
+///
+/// The `authenticator` verifies the credentials of remote peers that authenticate to this side;
+/// it is meaningless for the connecting side. `remote_authorized` tells whether the remote peer is
+/// authorized to send requests right away: the connecting side authorizes the accepting side
+/// immediately, while the accepting side authorizes the connecting side only once authenticated.
 pub(super) fn create<Handler>(
     handler: Handler,
-    authenticator: Option<Arc<dyn Authenticator + Send + Sync>>, // meaningless for a client
-    remote_authorized: bool,                                     // meaningless for a client
+    authenticator: Option<Arc<dyn Authenticator + Send + Sync>>,
+    remote_authorized: bool,
 ) -> Control<Handler> {
     let (capabilities_sender, capabilities_receiver) = watch::channel(Default::default());
-    let (remote_authorized_sender, remote_authorized_receiver) = watch::channel(remote_authorized);
+    let (remote_authorized_sender, _remote_authorized_receiver) = watch::channel(remote_authorized);
     let controller = Controller {
         authenticator,
         capabilities: capabilities_sender,
@@ -109,11 +132,12 @@ pub(super) fn create<Handler>(
     Control {
         controller,
         capabilities: capabilities_receiver,
-        remote_authorized: remote_authorized_receiver,
         handler: controlled_handler,
     }
 }
 
+/// A messaging handler that handles the control protocol and filters requests until the remote
+/// is authorized.
 pub(super) struct ControlledHandler<H> {
     inner: H,
     controller: Controller,
@@ -128,28 +152,36 @@ where
 
     fn handle_call(
         &mut self,
-        address: message::Address,
-        args: Bytes,
-    ) -> impl Future<Output = Result<Bytes, Self::Error>> + 'static + Send + 'static {
-        if is_control_address(address) {
+        call: handler::Call,
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<handler::Reply, Self::Error>> + Send + 'static {
+        if is_control_address(call.address) {
+            if call.address.action() != AUTHENTICATE_ACTION_ID {
+                return err(HandlerError::non_fatal(NoHandlerError(
+                    message::Type::Call,
+                    call.address,
+                )))
+                .left_future();
+            }
             let authenticate = || {
                 self.controller
-                    .authenticate(args.to_reflect_args()?)
+                    .authenticate(call.payload.to_reflect_args()?)
                     // All authentication errors are fatal
                     .map_err(HandlerError::fatal)?
                     .into_format_return_value()
+                    .map(handler::Reply::new)
                     .map_err(Into::into)
             };
             ready(authenticate()).left_future()
         } else if *self.controller.remote_authorized.borrow() {
             self.inner
-                .handle_call(address, args)
+                .handle_call(call, cancel)
                 .map_err(Into::into)
                 .right_future()
         } else {
             err(HandlerError::non_fatal(NoHandlerError(
                 message::Type::Call,
-                address,
+                call.address,
             )))
             .left_future()
         }
@@ -160,9 +192,9 @@ impl<Handler> messaging::EventHandler for ControlledHandler<Handler>
 where
     Handler: messaging::EventHandler + Sync,
 {
-    fn handle_event(&mut self, address: message::Address, value: Bytes) {
-        if !is_control_address(address) && *self.controller.remote_authorized.borrow() {
-            self.inner.handle_event(address, value)
+    fn handle_event(&mut self, event: handler::Event) {
+        if !is_control_address(event.address) && *self.controller.remote_authorized.borrow() {
+            self.inner.handle_event(event)
         }
     }
 }
@@ -171,24 +203,21 @@ impl<Handler> messaging::PostHandler for ControlledHandler<Handler>
 where
     Handler: messaging::PostHandler + Sync,
 {
-    fn handle_post(&mut self, address: message::Address, args: Bytes) {
-        if !is_control_address(address) && *self.controller.remote_authorized.borrow() {
-            self.inner.handle_post(address, args)
+    fn handle_post(&mut self, post: handler::Post) {
+        if !is_control_address(post.address) && *self.controller.remote_authorized.borrow() {
+            self.inner.handle_post(post)
         }
     }
 }
 
 impl<Handler> messaging::CapabilitiesHandler for ControlledHandler<Handler> {
-    fn handle_capabilities(&mut self, _address: message::Address, _map: KeyDynValueMap) {
-        // nothing, unhandled at the moment
+    fn handle_capabilities(&mut self, _address: message::Address, map: KeyDynValueMap) {
+        self.controller.set_remote_capabilities(&map);
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum AuthenticateClientError {
-    #[error("unexpected capability value")]
-    UnexpectedclientCapabilityValue(#[from] capabilities::KeyValueExpectError),
-
     #[error("failure to verify authentication request")]
     AuthenticationVerification(#[source] auth::Error),
 }
@@ -203,9 +232,6 @@ impl From<AuthenticateClientError> for Error {
 pub(super) enum AuthenticateToServerError {
     #[error("the authentication state sent back by the server is invalid")]
     ResultState(#[from] auth::StateError),
-
-    #[error("the server sent an unexpected capability value")]
-    UnexpectedServerCapabilityValue(#[from] capabilities::KeyValueExpectError),
 }
 
 impl From<AuthenticateToServerError> for Error {

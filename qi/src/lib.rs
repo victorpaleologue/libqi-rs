@@ -42,22 +42,27 @@
 #![doc = include_str!("../README.md")]
 
 pub mod auth;
+pub mod call;
+pub mod dynamic;
 mod error;
 pub mod node;
 pub mod object;
+pub mod property;
 pub mod service;
-pub(crate) mod service_directory;
+pub mod service_directory;
 pub(crate) mod session;
 pub mod signal;
 pub mod value;
 
-pub(crate) use self::{error::NoHandlerError, object::ArcObject};
 pub use self::{
+    dynamic::{DynamicObject, ObjectBuilder},
     error::{BoxError, Error, FormatError, HandlerError},
     node::Node,
-    object::{Object, ObjectClient, ObjectExt},
+    object::{AnyObject, Object, ObjectClient, ObjectExt},
+    property::Property,
     service_directory::ServiceDirectory,
-    signal::SignalConnection,
+    session::Capabilities,
+    signal::{Signal, Subscription},
 };
 pub use qi_format as format;
 pub use qi_macros::{object, FromValue, IntoValue, Reflect, ToValue, Valuable};

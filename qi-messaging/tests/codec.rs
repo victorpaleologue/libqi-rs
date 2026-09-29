@@ -115,7 +115,8 @@ fn decoder_success() {
         Ok(Some(Message::Event {
             id: Id(1),
             address: Address(service::Id(1), object::Id(1), object::ActionId(1)),
-            payload
+            payload,
+            ..
         })) => {
             assert_eq!(payload, [2, 0, 0, 0, b'h', b'i'].as_slice());
         }
@@ -128,6 +129,7 @@ fn encoder_success() {
         id: Id(1),
         address: Address::default(),
         payload: Bytes::from_static(&[1, 2, 3]),
+        flags: Default::default(),
     };
     let mut encoder_buf = BytesMut::new();
     let res = tokio_util::codec::Encoder::encode(&mut Encoder, message, &mut encoder_buf);

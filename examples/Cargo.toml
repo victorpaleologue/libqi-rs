@@ -19,6 +19,7 @@ bytes = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+futures = { workspace = true }
 
 [[example]]
 name = "client"

@@ -317,43 +317,26 @@ struct Empty;
 #[test]
 fn test_empty_derive_reflect() {
     use qi_value::Reflect;
-    assert_eq!(Transparent::ty(), Some(Type::String));
+    assert_eq!(Empty::ty(), Some(Type::Unit));
 }
 
 #[test]
 fn test_empty_derive_to_value() {
     use qi_value::ToValue;
-    assert_eq!(
-        Transparent {
-            s: "mangoes".to_owned()
-        }
-        .to_value(),
-        Value::String("mangoes".into()),
-    )
+    assert_eq!(Empty.to_value(), Value::Unit);
 }
 
 #[test]
 fn test_empty_derive_into_value() {
     use qi_value::IntoValue;
-    assert_eq!(
-        Transparent {
-            s: "pears".to_owned()
-        }
-        .into_value(),
-        Value::String("pears".into()),
-    )
+    assert_eq!(Empty.into_value(), Value::Unit);
 }
 
 #[test]
 fn test_empty_derive_from_value() {
     use qi_value::FromValue;
-    let value = "grapes".into_value();
-    assert_eq!(
-        Transparent::from_value(value).unwrap(),
-        Transparent {
-            s: "grapes".to_owned(),
-        }
-    );
+    assert_eq!(Empty::from_value(Value::Unit).unwrap(), Empty);
+    assert!(Empty::from_value(Value::Int32(1)).is_err());
 }
 
 #[derive(qi_macros::Reflect, qi_macros::ToValue, qi_macros::IntoValue, qi_macros::FromValue)]

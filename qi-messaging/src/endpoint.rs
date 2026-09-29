@@ -1,11 +1,10 @@
 use crate::{
-    client,
+    client, handler,
     message::Response,
     server::{self, DispatchFlow},
     Client, Handler, Message,
 };
 use async_stream::stream;
-use bytes::Bytes;
 use either::Either;
 use futures::{
     future::BoxFuture, pin_mut, stream::FusedStream, FutureExt, Sink, SinkExt, Stream, StreamExt,
@@ -13,6 +12,7 @@ use futures::{
 };
 use std::future::Future;
 use tokio::select;
+use tokio_util::sync::CancellationToken;
 
 pub fn start<MsgStream, MsgSink, Handler>(
     messages_stream: MsgStream,
@@ -102,13 +102,16 @@ where
         pin_mut!(messages);
         loop {
             select! {
-                Some(message) = messages.next(), if !messages.is_terminated() => {
+                message = messages.next(), if !messages.is_terminated() => {
                     match message {
-                        Ok(message) => dispatch.dispatch_message(message),
-                        Err(err) => {
+                        Some(Ok(message)) => dispatch.dispatch_message(message),
+                        Some(Err(err)) => {
                             yield Err(err);
                             break
                         }
+                        // The incoming messages stream is terminated: the link is closed, and
+                        // nothing can be answered anymore.
+                        None => break,
                     }
                 }
                 message = dispatch.client_requests.next() => {
@@ -136,7 +139,7 @@ where
 struct Dispatch<H, E> {
     handler: H,
     client_requests: client::Requests,
-    server_calls: server::CallFutures<BoxFuture<'static, Result<Bytes, E>>>,
+    server_calls: server::CallFutures<BoxFuture<'static, Result<handler::Reply, E>>>,
 }
 
 impl<H> Dispatch<H, H::Error>
@@ -157,19 +160,43 @@ where
                 id,
                 address,
                 payload,
+                flags,
             } => {
-                let call_future = self.handler.handle_call(address, payload);
-                self.server_calls.push(id, address, call_future.boxed());
+                let cancel = CancellationToken::new();
+                let call_future = self.handler.handle_call(
+                    handler::Call {
+                        address,
+                        payload,
+                        flags,
+                    },
+                    cancel.clone(),
+                );
+                self.server_calls
+                    .push(id, address, cancel, call_future.boxed());
             }
             Message::Post {
-                address, payload, ..
+                address,
+                payload,
+                flags,
+                ..
             } => {
-                self.handler.handle_post(address, payload);
+                self.handler.handle_post(handler::Post {
+                    address,
+                    payload,
+                    flags,
+                });
             }
             Message::Event {
-                address, payload, ..
+                address,
+                payload,
+                flags,
+                ..
             } => {
-                self.handler.handle_event(address, payload);
+                self.handler.handle_event(handler::Event {
+                    address,
+                    payload,
+                    flags,
+                });
             }
             Message::Capabilities {
                 address,
@@ -181,9 +208,11 @@ where
             Message::Cancel { call_id, .. } => {
                 self.server_calls.cancel(&call_id);
             }
-            Message::Reply { id, payload, .. } => {
+            Message::Reply {
+                id, payload, flags, ..
+            } => {
                 self.client_requests
-                    .dispatch_response(id, Response::Reply(payload));
+                    .dispatch_response(id, Response::Reply(payload, flags));
             }
             Message::Error { id, error, .. } => {
                 self.client_requests

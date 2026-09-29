@@ -1,9 +1,4 @@
-use crate::{
-    auth::Authenticator,
-    error::HandlerError,
-    messaging::{self, Address},
-    session,
-};
+use crate::{auth::Authenticator, messaging::Address, service::SharedServices, session};
 use std::{collections::HashMap, sync::Arc};
 use tokio::{sync::watch, task};
 
@@ -24,28 +19,26 @@ pub(super) type EndpointsWatcher = watch::Receiver<HashMap<Address, Vec<Address>
 ///
 /// If any server fails to bind to its address, then the future terminates with an error and all
 /// created servers are stopped.
-pub(super) async fn start_servers<Handler>(
-    handler: Handler,
+pub(super) async fn start_servers(
+    services: SharedServices,
     authenticator: Option<Arc<dyn Authenticator + Send + Sync>>,
     addresses: impl IntoIterator<Item = Address>,
-) -> Result<(ServerSet, EndpointsWatcher), std::io::Error>
-where
-    Handler: messaging::CallHandler
-        + messaging::EventHandler
-        + messaging::PostHandler
-        + Send
-        + Sync
-        + Clone
-        + 'static,
-    Handler::Error: Into<HandlerError>,
-{
+) -> Result<(ServerSet, EndpointsWatcher), std::io::Error> {
     let (endpoints_sender, endpoints_receiver) = watch::channel(Default::default());
     let mut servers = Vec::new();
     let mut update_endpoints_tasks = task::JoinSet::new();
     for address in addresses {
         let (server, mut server_endpoints) =
-            session::server(address, authenticator.clone(), handler.clone()).await?;
+            session::server(address, authenticator.clone(), services.clone()).await?;
         servers.push(server);
+        // Publish the initial endpoints synchronously, so that they are known when the servers
+        // are started.
+        {
+            let server_endpoints = server_endpoints.borrow_and_update();
+            endpoints_sender.send_modify(|endpoints: &mut HashMap<_, _>| {
+                endpoints.insert(server_endpoints.0, server_endpoints.1.clone());
+            });
+        }
         let endpoints_sender = endpoints_sender.clone();
         update_endpoints_tasks.spawn(async move {
             while let Ok(()) = server_endpoints.changed().await {

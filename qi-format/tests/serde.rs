@@ -189,8 +189,8 @@ fn object_descr_from_to_format() {
 
     assert_eq!(
         object,
-        Object {
-            meta_object: MetaObject {
+        Object::new(
+            MetaObject {
                 methods: Map::from_iter([
                     (
                         ActionId(0),
@@ -492,14 +492,14 @@ fn object_descr_from_to_format() {
                 )]),
                 description: String::new(),
             },
-            service_id: service::Id(2),
-            object_id: object::Id(4),
-            object_uid: [
+            service::Id(2),
+            object::Id(4),
+            [
                 0x0b, 0xf8, 0xf7, 0x86, 0x6b, 0x07, 0x04, 0x05, 0xd6, 0x3f, 0xe4, 0x39, 0xf9, 0x47,
                 0x7e, 0x96, 0xfc, 0x2f, 0x2c, 0x3d
             ]
             .into(),
-        }
+        )
     );
     let value_out = to_bytes(&object).unwrap();
     assert_eq!(value_in, value_out);

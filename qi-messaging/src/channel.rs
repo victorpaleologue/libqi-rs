@@ -18,10 +18,15 @@ pub async fn connect(
             let (read, write) = TcpStream::connect(address).await?.into_split();
             (Box::pin(read), Box::pin(write))
         }
-        _ => todo!(),
+        Address::Tcp { ssl: Some(_), .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "connecting to a TCP endpoint with SSL is not yet supported",
+            ))
+        }
     };
     let stream = FramedRead::new(read, Decoder::default());
-    let sink = FramedWrite::new(write, Encoder::default());
+    let sink = FramedWrite::new(write, Encoder);
     Ok((stream, sink))
 }
 
@@ -43,7 +48,10 @@ pub async fn serve(
     match address {
         Address::Tcp { address, ssl } => {
             if ssl.is_some() {
-                unimplemented!("binding to a TCP endpoint with SSL is not yet supported")
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "binding to a TCP endpoint with SSL is not yet supported",
+                ));
             }
             let listener = TcpListener::bind(address).await?;
             let endpoint = listener
@@ -56,7 +64,7 @@ pub async fn serve(
                     if let Ok((socket , address)) = listener.accept().await {
                         let (read, write) = socket.into_split();
                         let stream = FramedRead::new(read, Decoder::default());
-                        let sink = FramedWrite::new(write, Encoder::default());
+                        let sink = FramedWrite::new(write, Encoder);
                         yield (stream, sink, Address::Tcp { address, ssl });
                     }
                 }

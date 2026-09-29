@@ -1,3 +1,5 @@
+//! Values of the `qi` type system, and their conversions to and from the wire format.
+
 use crate::{error::ValueConversionError, format, FormatError, Result};
 use bytes::Bytes;
 use either::Either;
@@ -5,8 +7,11 @@ pub use qi_value::*;
 use sealed::sealed;
 use serde::de::DeserializeSeed;
 
+/// Deserialization of values from the `qi` format.
 #[sealed]
 pub trait FormatInto {
+    /// Deserializes a value of the given type. Object references are expected to carry the
+    /// object UID.
     fn to_value<'de>(&'de self, ty: Option<&Type>) -> format::Result<Value<'de>>;
 
     fn to_reflect_value<'de, T>(
@@ -67,10 +72,11 @@ where
     T: AsRef<[u8]>,
 {
     fn to_value<'de>(&'de self, ty: Option<&Type>) -> format::Result<Value<'de>> {
-        de::ValueType(ty).deserialize(format::SliceDeserializer::new(self.as_ref()))
+        de::ValueType::new(ty).deserialize(format::SliceDeserializer::new(self.as_ref()))
     }
 }
 
+/// Serialization of values to the `qi` format.
 #[sealed]
 pub trait IntoFormat: Sized {
     fn into_format(self) -> format::Result<Bytes>;

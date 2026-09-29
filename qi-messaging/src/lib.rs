@@ -57,8 +57,10 @@ pub use self::{
     client::{Client, WeakClient},
     codec::{DecodeError, Decoder, EncodeError, Encoder},
     error::Error,
-    handler::{CallHandler, CapabilitiesHandler, EventHandler, Handler, PostHandler},
-    message::Message,
+    handler::{
+        CallHandler, CancellationToken, CapabilitiesHandler, EventHandler, Handler, PostHandler,
+    },
+    message::{Flags, Message},
 };
 pub use qi_format as format;
 pub use qi_value as value;

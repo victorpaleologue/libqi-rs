@@ -12,6 +12,12 @@ pub enum Error {
     #[error("there is no object method with identifier {0}")]
     MethodNotFound(value::object::ActionNameOrId),
 
+    #[error("there is no object signal with identifier {0}")]
+    SignalNotFound(value::object::ActionNameOrId),
+
+    #[error("there is no object property with identifier {0}")]
+    PropertyNotFound(value::object::ActionNameOrId),
+
     #[error(transparent)]
     Other(#[from] BoxError),
 }
@@ -83,6 +89,12 @@ impl From<FormatError> for crate::Error {
 #[derive(Debug, thiserror::Error)]
 #[error("there is no handler for message of type {0} to address {1}")]
 pub(crate) struct NoHandlerError(pub(crate) message::Type, pub(crate) message::Address);
+
+impl From<value::FromValueError> for Error {
+    fn from(err: value::FromValueError) -> Self {
+        Error::Other(err.into())
+    }
+}
 
 impl From<NoHandlerError> for Error {
     fn from(err: NoHandlerError) -> Self {

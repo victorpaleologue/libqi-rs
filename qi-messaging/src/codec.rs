@@ -44,7 +44,7 @@
 
 use crate::{
     format,
-    message::{Address, Id, Message, MetaData, Type, Version},
+    message::{Address, Flags, Id, Message, MetaData, Type, Version},
 };
 use bytes::{Buf, BufMut, BytesMut};
 use tracing::instrument;
@@ -191,9 +191,14 @@ fn decode_header(src: &mut BytesMut) -> Result<Option<(usize, MetaData)>, Decode
     }
 
     let ty = get_type(src)?;
-    src.advance(1); // Flags
+    let flags = get_flags(src)?;
     let address = get_address(src);
-    let meta = MetaData { id, address, ty };
+    let meta = MetaData {
+        id,
+        address,
+        ty,
+        flags,
+    };
     Ok(Some((body_size, meta)))
 }
 
@@ -203,7 +208,7 @@ fn put_header(meta: MetaData, body_size: usize, dst: &mut BytesMut) -> Result<()
     put_body_size(body_size, dst)?;
     put_version(Version::default(), dst);
     put_type(meta.ty, dst);
-    dst.put_u8(0); // Flags
+    put_flags(meta.flags, dst);
     put_address(meta.address, dst);
     Ok(())
 }
@@ -319,6 +324,18 @@ fn put_type(ty: Type, dst: &mut BytesMut) {
         Type::Canceled => 8,
     };
     dst.put_u8(ty_u8)
+}
+
+/// Flags representation values:
+///   - DYNAMIC_PAYLOAD = 1
+///   - RETURN_TYPE = 2
+fn get_flags(src: &mut BytesMut) -> Result<Flags, DecodeError> {
+    let byte = src.get_u8();
+    Flags::from_bits(byte).ok_or(DecodeError::InvalidFlagsValue(byte))
+}
+
+fn put_flags(flags: Flags, dst: &mut BytesMut) {
+    dst.put_u8(flags.bits())
 }
 
 fn get_address(src: &mut BytesMut) -> Address {

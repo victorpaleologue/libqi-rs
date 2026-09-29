@@ -1,26 +1,26 @@
+//! Services: named objects published on a space.
+//!
+//! A service is the main object of a node, registered under a name to the service directory of a
+//! space, and described by a service [`Info`].
+
 use crate::{
-    messaging::{self, message},
-    node, object, session,
-    value::{self, os, FormatInto, IntoFormat},
-    ArcObject, Error, HandlerError, NoHandlerError, Object, Result,
+    node, object,
+    object::AnyObject,
+    session,
+    value::{self, os},
 };
-use async_trait::async_trait;
-use bytes::Bytes;
-use futures::{FutureExt, TryFutureExt};
-use qi_value::RuntimeReflect;
-use std::{collections::HashMap, future::Future, sync::Arc};
-use tokio::{
-    sync::{Mutex, OwnedMutexGuard},
-    task,
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
 };
-use tracing::info;
 pub use value::service::*;
 
-pub(super) const MAIN_OBJECT_ID: object::Id = object::Id(1);
+/// The service identifier of services that are not registered yet.
 const UNSPECIFIED_ID: Id = Id(0);
 
+/// The information describing a service in a service directory.
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, qi_macros::Valuable)]
-#[qi(value(crate = "crate::value", case = "camelCase"))]
+#[qi(value(crate = "crate::value", case = "camelCase", name = "ServiceInfo"))]
 pub struct Info {
     pub(super) name: String,
     #[qi(value(name = "serviceId"))]
@@ -32,7 +32,7 @@ pub struct Info {
     pub(super) node_uid: node::Uid,
     /// Object uid in service info are represented as strings containing pure binary data for
     /// compatibility reasons. They are therefore NOT UTF-8 valid strings or even contain printable
-    /// characters.
+    /// characters. An empty string means the object UID is unknown.
     pub(super) object_uid: ObjectUidAsStr,
 }
 
@@ -43,7 +43,7 @@ impl Info {
         node_uid: node::Uid,
         object_uid: object::Uid,
     ) -> Self {
-        Self::process_local(name, UNSPECIFIED_ID, endpoints, node_uid, object_uid)
+        Self::process_local(name, UNSPECIFIED_ID, endpoints, node_uid, Some(object_uid))
     }
 
     pub(super) fn process_local(
@@ -51,7 +51,7 @@ impl Info {
         id: Id,
         endpoints: Vec<session::Target>,
         node_uid: node::Uid,
-        object_uid: object::Uid,
+        object_uid: Option<object::Uid>,
     ) -> Self {
         Self {
             name,
@@ -64,27 +64,38 @@ impl Info {
         }
     }
 
+    /// The name of the service.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The identifier of the service in its space.
     pub fn id(&self) -> Id {
         self.id
     }
 
+    /// The identifier of the machine that hosts the service.
     pub fn machine_id(&self) -> os::MachineId {
         self.machine_id
     }
 
+    /// The identifier of the process that hosts the service.
     pub fn process_id(&self) -> u32 {
         self.process_id
     }
 
+    /// The endpoints the service can be reached at.
     pub fn endpoints(&self) -> &[session::Target] {
         &self.endpoints
     }
 
+    /// The identifier of the node that hosts the service.
     pub fn node_uid(&self) -> node::Uid {
         self.node_uid.clone()
     }
 
-    pub fn object_uid(&self) -> object::Uid {
+    /// The UID of the main object of the service, if known.
+    pub fn object_uid(&self) -> Option<object::Uid> {
         self.object_uid.0
     }
 }
@@ -106,32 +117,28 @@ impl std::fmt::Display for Info {
                 process={process_id}, \
                 endpoints=["
         )?;
-        for endpoint in endpoints {
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
             endpoint.fmt(f)?;
         }
-        write!(
-            f,
-            "], node={node_uid}, \
-                object={object_uid})"
-        )
+        write!(f, "], node={node_uid}, object={object_uid})")
     }
 }
 
-#[derive(
-    Default,
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    derive_more::Display,
-    derive_more::From,
-    derive_more::Into,
-)]
-pub(super) struct ObjectUidAsStr(pub object::Uid);
+/// An optional object UID represented as a string of raw bytes.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(super) struct ObjectUidAsStr(pub Option<object::Uid>);
+
+impl std::fmt::Display for ObjectUidAsStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(uid) => uid.fmt(f),
+            None => f.write_str("none"),
+        }
+    }
+}
 
 impl value::Reflect for ObjectUidAsStr {
     fn ty() -> Option<value::Type> {
@@ -147,18 +154,25 @@ impl value::RuntimeReflect for ObjectUidAsStr {
 
 impl value::ToValue for ObjectUidAsStr {
     fn to_value(&self) -> value::Value<'_> {
-        value::String::from_maybe_utf8(self.0.bytes()).into()
+        match &self.0 {
+            Some(uid) => value::String::from_maybe_utf8(uid.bytes()).into(),
+            None => value::String::Borrowed("").into(),
+        }
     }
 }
 
 impl<'a> value::IntoValue<'a> for ObjectUidAsStr {
     fn into_value(self) -> value::Value<'a> {
-        value::String::from_maybe_utf8_owned(self.0.bytes().to_vec()).into()
+        match self.0 {
+            Some(uid) => value::String::from_maybe_utf8_owned(uid.bytes().to_vec()).into(),
+            None => value::String::Borrowed("").into(),
+        }
     }
 }
 
 impl<'a> value::FromValue<'a> for ObjectUidAsStr {
     fn from_value(value: value::Value<'a>) -> std::result::Result<Self, value::FromValueError> {
+        use value::RuntimeReflect;
         let value_type = value.ty();
         let value_str = value
             .into_string()
@@ -166,215 +180,88 @@ impl<'a> value::FromValue<'a> for ObjectUidAsStr {
                 expected: "an Object UID".to_owned(),
                 actual: value_type.to_string(),
             })?;
-        let bytes = <[u8; 20]>::try_from(value_str.as_bytes())
-            .map_err(|err| value::FromValueError::Other(err.into()))?;
-        Ok(Self(bytes.into()))
+        let bytes = value_str.as_bytes();
+        if bytes.is_empty() {
+            return Ok(Self(None));
+        }
+        let bytes =
+            <[u8; 20]>::try_from(bytes).map_err(|err| value::FromValueError::Other(err.into()))?;
+        Ok(Self(Some(bytes.into())))
     }
 }
 
-#[derive(Default)]
 struct Service {
     info: Info,
-    bound_objects: HashMap<object::Id, ArcObject>,
-}
-
-impl Service {
-    pub(super) fn new(info: Info, main_object: ArcObject) -> Self {
-        Self {
-            info,
-            bound_objects: [(MAIN_OBJECT_ID, main_object)].into_iter().collect(),
-        }
-    }
+    object: AnyObject,
 }
 
 impl std::fmt::Debug for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Service")
             .field("info", &self.info)
-            .field("bound_objects", &self.bound_objects.keys())
+            .field("object_uid", &self.object.uid())
             .finish()
     }
 }
 
+/// The services registered on a node, indexed by identifier.
 #[derive(Debug, Default)]
 pub(super) struct Services(HashMap<Id, Service>);
 
 impl Services {
-    fn insert_handler(&mut self, info: Info, service_object: ArcObject) {
-        self.0.insert(info.id(), Service::new(info, service_object));
-    }
-
     pub(super) fn info_mut(&mut self) -> impl Iterator<Item = &mut Info> {
-        self.0.values_mut().map(|data| &mut data.info)
+        self.0.values_mut().map(|service| &mut service.info)
     }
 
-    async fn route_call(&self, address: message::Address, args: Bytes) -> Result<Bytes> {
-        let (object, ident) = self
-            .get_request_handler(address)
-            .ok_or(NoHandlerError(message::Type::Call, address))?;
-        object.handle_meta_call(ident, args).await
-    }
-
-    async fn route_post(&self, address: message::Address, args: Bytes) {
-        let (object, action) = match self.get_request_handler(address) {
-            Some(handler) => handler,
-            None => {
-                info!(%address, "post request discarded: no handler");
-                return;
-            }
-        };
-        object.handle_meta_post(action, args).await
-    }
-
-    async fn route_event(&self, address: message::Address, args: Bytes) {
-        let (object, action) = match self.get_request_handler(address) {
-            Some(handler) => handler,
-            None => {
-                info!(%address, "event request discarded: no handler");
-                return;
-            }
-        };
-        object.handle_meta_event(action, args).await
-    }
-
-    fn get_request_handler(
-        &self,
-        address: message::Address,
-    ) -> Option<(&ArcObject, object::ActionId)> {
-        let message::Address(service_id, object_id, action_id) = address;
-        let object = self
-            .0
-            .get(&service_id)
-            .and_then(|service| service.bound_objects.get(&object_id))?;
-        Some((object, action_id))
+    pub(super) fn infos(&self) -> impl Iterator<Item = &Info> {
+        self.0.values().map(|service| &service.info)
     }
 }
 
-/// A messaging handler-like interface for objects.
-///
-/// Messaging handlers take messaging address as parameter, while this interface only takes action
-/// identifiers (so without the service and object identifiers in messaging addresses).
-#[async_trait]
-trait HandlerObject: Object {
-    async fn handle_meta_call(&self, id: object::ActionId, args: Bytes) -> Result<Bytes> {
-        // Get the target method so that we can get the expected parameters type and know what type
-        // of value we're supposed to deserialize.
-        let action_name_or_id = object::ActionNameOrId::Id(id);
-        let method = self
-            .meta()
-            .method(&action_name_or_id)
-            .ok_or_else(|| Error::MethodNotFound(action_name_or_id.clone()))?;
-        self.meta_call(
-            action_name_or_id,
-            args.to_args(method.parameters_signature.as_type())?,
-        )
-        .await?
-        .into_format_return_value()
-    }
-
-    async fn handle_meta_post<'a>(&'a self, id: object::ActionId, args: Bytes) {
-        // Same as for "call", we need to know the type of parameters to know what to deserialize.
-        let action_name_or_id = object::ActionNameOrId::Id(id);
-        let action = match object::PostAction::get(self.meta(), &action_name_or_id) {
-            Some(action) => action,
-            None => {
-                info!(
-                    action = %action_name_or_id,
-                    "post request discarded: action not found"
-                );
-                return;
-            }
-        };
-        match args.to_args(action.parameters_signature().as_type()) {
-            Ok(args) => self.meta_post(action_name_or_id, args).await,
-            Err(err) => info!(
-                error = &err as &dyn std::error::Error,
-                "post request discarded: failed to deserialize arguments"
-            ),
-        };
-    }
-
-    async fn handle_meta_event<'a>(&'a self, action: object::ActionId, args: Bytes) {
-        let action_name_or_id = object::ActionNameOrId::Id(action);
-        let signal = match self.meta().signal(&action_name_or_id) {
-            Some(signal) => signal,
-            None => {
-                info!(
-                    signal = %action_name_or_id,
-                    "event request discarded: signal not found"
-                );
-                return;
-            }
-        };
-        match args.to_args(signal.signature.as_type()) {
-            Ok(args) => self.meta_event(action_name_or_id, args).await,
-            Err(err) => info!(
-                error = &err as &dyn std::error::Error,
-                "event request discarded: failed to deserialize arguments"
-            ),
-        };
-    }
-}
-
-impl<O> HandlerObject for O where O: Object + Sync + ?Sized {}
-
-/// A messaging handler that routes requests to services.
+/// The shared, thread-safe registry of the services of a node.
 #[derive(Default, Clone, Debug)]
-pub(super) struct SharedServices {
+pub(crate) struct SharedServices {
     services: Arc<Mutex<Services>>,
 }
 
 impl SharedServices {
-    pub(super) async fn add(&self, info: Info, object: ArcObject) {
-        self.services.lock().await.insert_handler(info, object)
+    fn lock(&self) -> std::sync::MutexGuard<'_, Services> {
+        self.services.lock().unwrap_or_else(|err| err.into_inner())
     }
 
-    pub(super) async fn lock(&self) -> OwnedMutexGuard<Services> {
-        Arc::clone(&self.services).lock_owned().await
+    /// Adds a service, making its main object reachable under its identifier.
+    pub(crate) fn add(&self, info: Info, object: AnyObject) {
+        self.lock().0.insert(info.id(), Service { info, object });
     }
-}
 
-impl messaging::CallHandler for SharedServices {
-    type Error = HandlerError;
-
-    fn handle_call(
-        &mut self,
-        address: message::Address,
-        value: Bytes,
-    ) -> impl Future<Output = std::result::Result<Bytes, Self::Error>> + Send + 'static {
-        let handlers = Arc::clone(&self.services);
-        task::spawn(async move {
-            handlers
-                .lock_owned()
-                .await
-                .route_call(address, value)
-                .await
-                .map_err(Into::into)
-        })
-        .map_err(Into::into)
-        .map(|res| res.flatten())
+    /// The main object of a service.
+    pub(crate) fn object(&self, id: Id) -> Option<AnyObject> {
+        self.lock().0.get(&id).map(|service| service.object.clone())
     }
-}
 
-impl messaging::EventHandler for SharedServices {
-    fn handle_event(&mut self, address: message::Address, args: Bytes) {
-        let handlers = Arc::clone(&self.services);
-        task::spawn(async move { handlers.lock_owned().await.route_event(address, args).await });
+    /// Finds a service by name.
+    pub(crate) fn find(&self, name: &str) -> Option<(Info, AnyObject)> {
+        self.lock()
+            .0
+            .values()
+            .find(|service| service.info.name == name)
+            .map(|service| (service.info.clone(), service.object.clone()))
     }
-}
 
-impl messaging::PostHandler for SharedServices {
-    fn handle_post(&mut self, address: message::Address, args: Bytes) {
-        let handlers = Arc::clone(&self.services);
-        task::spawn(async move { handlers.lock_owned().await.route_post(address, args).await });
+    /// Updates the endpoints of every service, returning the updated infos.
+    pub(crate) fn set_endpoints(&self, endpoints: &[session::Target]) -> Vec<Info> {
+        let mut services = self.lock();
+        for info in services.info_mut() {
+            info.endpoints = endpoints.to_vec();
+        }
+        services.infos().cloned().collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging;
-    use messaging::Address;
+    use crate::{messaging::Address, value::FormatInto, value::IntoFormat};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -410,12 +297,14 @@ mod tests {
                     })
                 ],
                 node_uid: node::Uid::from_string("361ecec4-00f7-4c94-a6e2-d91e28c5a06c".to_owned()),
-                object_uid: ObjectUidAsStr(object::Uid::from([
+                object_uid: ObjectUidAsStr(Some(object::Uid::from([
                     0xfd, 0xeb, 0xc1, 0x2e, 0xcb, 0xea, 0x6b, 0x58, 0xcc, 0x42, 0x20, 0xb7, 0x33,
                     0x3d, 0xc4, 0xe1, 0x0d, 0x8a, 0xd6, 0x16
-                ]))
+                ])))
             }
-        )
+        );
+        // Round trip.
+        assert_eq!(service_info.into_format().unwrap(), value_in);
     }
 
     #[test]
@@ -426,7 +315,7 @@ mod tests {
         ][..];
         let object_uid: ObjectUidAsStr = value_in.to_reflect_value().unwrap();
         assert_eq!(
-            object_uid.0,
+            object_uid.0.unwrap(),
             [
                 0xfd, 0xeb, 0xc1, 0x2e, 0xcb, 0xea, 0x6b, 0x58, 0xcc, 0x42, 0x20, 0xb7, 0x33, 0x3d,
                 0xc4, 0xe1, 0x0d, 0x8a, 0xd6, 0x16
@@ -434,5 +323,9 @@ mod tests {
         );
         let value_out = object_uid.into_format().unwrap();
         assert_eq!(value_out, value_in);
+
+        // An absent UID is an empty string.
+        let none: ObjectUidAsStr = (&[0u8, 0, 0, 0][..]).to_reflect_value().unwrap();
+        assert_eq!(none.0, None);
     }
 }

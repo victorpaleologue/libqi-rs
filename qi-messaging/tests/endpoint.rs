@@ -8,10 +8,10 @@ use futures::{
 use qi_format::{from_slice, to_bytes};
 use qi_messaging::{
     endpoint,
-    handler::CallError,
+    handler::{self, CallError},
     message::{self, Address, Id},
     value::{object, service},
-    CallHandler, CapabilitiesHandler, Error, EventHandler, Message, PostHandler,
+    CallHandler, CancellationToken, CapabilitiesHandler, Error, EventHandler, Message, PostHandler,
 };
 use qi_value::{KeyDynValueMap, Value};
 use std::{
@@ -40,6 +40,7 @@ fn client_call() {
     let mut call = task::spawn(client.call(
         Address(service::Id(1), object::Id(2), object::ActionId(3)),
         to_bytes(&HandlerValue::Ok("My name is Alice")).unwrap(),
+        message::Flags::NONE,
     ));
     assert_pending!(call.poll());
 
@@ -53,6 +54,7 @@ fn client_call() {
             id: Id(1),
             address: Address(service::Id(1), object::Id(2), object::ActionId(3)),
             payload,
+            ..
         } => {
             let value = from_slice::<HandlerValue>(&payload).unwrap();
             assert_eq!(value, Ok("My name is Alice"));
@@ -64,13 +66,14 @@ fn client_call() {
             id: Id(1),
             address: Address(service::Id(1), object::Id(2), object::ActionId(3)),
             payload: to_bytes(&HandlerValue::Ok("Hello Alice (from server)")).unwrap(),
+            flags: Default::default(),
         }))
         .expect("could not send call reply");
     assert_pending!(outgoing.poll_next());
 
     assert!(call.is_woken());
     let reply = assert_ready_ok!(call.poll());
-    let reply = from_slice::<HandlerValue>(&reply).unwrap();
+    let reply = from_slice::<HandlerValue>(&reply.payload).unwrap();
     assert_eq!(reply, Ok("Hello Alice (from server)"));
 }
 
@@ -88,6 +91,7 @@ fn client_call_error() {
     let mut call = task::spawn(client.call(
         Address(service::Id(1), object::Id(2), object::ActionId(3)),
         Bytes::from_static(b"My name is Alice"),
+        message::Flags::NONE,
     ));
     assert_pending!(call.poll());
 
@@ -126,6 +130,7 @@ fn client_call_canceled() {
     let mut call = task::spawn(client.call(
         Address(service::Id(1), object::Id(2), object::ActionId(3)),
         Bytes::from_static(b"My name is Alice"),
+        message::Flags::NONE,
     ));
     assert_pending!(call.poll());
 
@@ -150,7 +155,8 @@ fn client_call_canceled() {
 #[test]
 fn client_post() {
     let (handler, _) = SimpleHandler::new();
-    let (client, outgoing) = endpoint::dispatch(stream::empty::<Result<_, Infallible>>(), handler);
+    let (client, outgoing) =
+        endpoint::dispatch(stream::pending::<Result<_, Infallible>>(), handler);
 
     let mut outgoing = task::spawn(outgoing);
     assert_pending!(outgoing.poll_next());
@@ -158,6 +164,7 @@ fn client_post() {
     let mut send = task::spawn(client.post(
         Address(service::Id(1), object::Id(2), object::ActionId(3)),
         Bytes::from_static(b"Say hi to Bob for me"),
+        message::Flags::NONE,
     ));
     assert_ready_ok!(send.poll());
 
@@ -170,7 +177,8 @@ fn client_post() {
         Message::Post {
             id: Id(1),
             address: Address(service::Id(1), object::Id(2), object::ActionId(3)),
-            payload
+            payload,
+            ..
         } => {
             assert_eq!(payload, b"Say hi to Bob for me".as_slice());
         }
@@ -180,7 +188,8 @@ fn client_post() {
 #[test]
 fn client_event() {
     let (handler, _) = SimpleHandler::new();
-    let (client, outgoing) = endpoint::dispatch(stream::empty::<Result<_, Infallible>>(), handler);
+    let (client, outgoing) =
+        endpoint::dispatch(stream::pending::<Result<_, Infallible>>(), handler);
 
     let mut outgoing = task::spawn(outgoing);
     assert_pending!(outgoing.poll_next());
@@ -188,6 +197,7 @@ fn client_event() {
     let mut send = task::spawn(client.send_event(
         Address(service::Id(1), object::Id(2), object::ActionId(3)),
         Bytes::from_static(b"Carol says hi by the way"),
+        message::Flags::NONE,
     ));
     assert_ready_ok!(send.poll());
 
@@ -200,7 +210,8 @@ fn client_event() {
         Message::Event {
             id: Id(1),
             address: Address(service::Id(1), object::Id(2), object::ActionId(3)),
-            payload
+            payload,
+            ..
         } => {
             assert_eq!(payload, b"Carol says hi by the way".as_slice());
         }
@@ -210,7 +221,8 @@ fn client_event() {
 #[test]
 fn client_drop_closes_endpoint() {
     let (handler, _) = SimpleHandler::new();
-    let (client, outgoing) = endpoint::dispatch(stream::empty::<Result<_, Infallible>>(), handler);
+    let (client, outgoing) =
+        endpoint::dispatch(stream::pending::<Result<_, Infallible>>(), handler);
     let mut outgoing = task::spawn(outgoing);
     assert_pending!(outgoing.poll_next());
     drop(client);
@@ -233,6 +245,7 @@ fn handler_call() {
             id: Id(1),
             address: Address(service::Id(3), object::Id(2), object::ActionId(1)),
             payload: to_bytes(&HandlerValue::Ok("My name is Alice")).unwrap(),
+            flags: Default::default(),
         }))
         .expect("failed to send call message");
 
@@ -245,7 +258,8 @@ fn handler_call() {
         Message::Reply {
             id: Id(1),
             address: Address(service::Id(3), object::Id(2), object::ActionId(1)),
-            payload
+            payload,
+            ..
         } => {
             let value = from_slice::<&str>(&payload).unwrap();
             assert_eq!(value, "My name is Alice");
@@ -273,6 +287,7 @@ fn handler_call_error() {
                 is_fatal: false,
             }))
             .unwrap(),
+            flags: Default::default(),
         }))
         .expect("failed to send call message");
 
@@ -311,6 +326,7 @@ fn handler_call_error_fatal() {
                 is_fatal: true,
             }))
             .unwrap(),
+            flags: Default::default(),
         }))
         .expect("failed to send call message");
 
@@ -353,6 +369,7 @@ fn handler_call_canceled() {
                 is_fatal: false,
             }))
             .unwrap(),
+            flags: Default::default(),
         }))
         .expect("failed to send call message");
 
@@ -369,8 +386,9 @@ fn handler_call_canceled() {
     );
 }
 
-/// Tests that a call to the handler is correctly canceled when a cancel message is received,
-/// and that the call future is consequently dropped.
+/// Tests that a call to the handler is correctly canceled when a cancel message is received:
+/// the cancellation token of the call is triggered and the handler result, a canceled error, is
+/// sent back as a canceled message.
 #[test]
 fn handler_call_cancel() {
     let (mut incoming_messages_sender, incoming_messages_receiver) =
@@ -385,6 +403,7 @@ fn handler_call_cancel() {
             id: Id(1),
             address: Address::default(),
             payload: Bytes::new(),
+            flags: Default::default(),
         }))
         .expect("failed to send call message");
 
@@ -426,8 +445,10 @@ fn handler_concurrent_calls() {
         id: Id::default(),
         address: Address::default(),
         payload: Bytes::new(),
+        flags: Default::default(),
     }))
-    .take(HANDLER_CONCURRENT_CALLS);
+    .take(HANDLER_CONCURRENT_CALLS)
+    .chain(stream::pending());
 
     let handler = CountedPendingHandler::new();
     let (_client, outgoing) = endpoint::dispatch(messages, &handler);
@@ -457,6 +478,7 @@ fn handler_post() {
             id: Id(1),
             address: Address(service::Id(1), object::Id(2), object::ActionId(3)),
             payload: Bytes::from_static(b"Bob says hi back"),
+            flags: Default::default(),
         }))
         .expect("could not send post message");
 
@@ -488,6 +510,7 @@ fn handler_event() {
             id: Id(1),
             address: Address(service::Id(1), object::Id(2), object::ActionId(3)),
             payload: Bytes::from_static(b"Carol received your 'hi'"),
+            flags: Default::default(),
         }))
         .expect("could not send event message");
 
@@ -598,30 +621,37 @@ impl CountedPendingHandler {
 }
 
 impl CallHandler for &'_ CountedPendingHandler {
-    type Error = Infallible;
+    type Error = HandlerError;
 
     fn handle_call(
         &mut self,
-        _address: message::Address,
-        _: Bytes,
-    ) -> impl Future<Output = Result<Bytes, Self::Error>> + Send + 'static {
+        _call: handler::Call,
+        cancel: CancellationToken,
+    ) -> impl Future<Output = Result<handler::Reply, Self::Error>> + Send + 'static {
         let drop_guard = DecreaseCountDropGuard::new(&self.pending_calls);
         let unblock = Arc::clone(&self.unblock);
         async move {
-            unblock.notified().await;
+            let result = tokio::select! {
+                () = unblock.notified() => Ok(handler::Reply::new(Bytes::new())),
+                () = cancel.cancelled() => Err(HandlerError {
+                    message: "canceled".to_owned(),
+                    is_canceled: true,
+                    is_fatal: false,
+                }),
+            };
             drop(drop_guard);
-            Ok(Bytes::new())
+            result
         }
         .boxed()
     }
 }
 
 impl EventHandler for &'_ CountedPendingHandler {
-    fn handle_event(&mut self, _address: message::Address, _args: Bytes) {}
+    fn handle_event(&mut self, _event: handler::Event) {}
 }
 
 impl PostHandler for &'_ CountedPendingHandler {
-    fn handle_post(&mut self, _address: message::Address, _args: Bytes) {}
+    fn handle_post(&mut self, _post: handler::Post) {}
 }
 
 impl CapabilitiesHandler for &'_ CountedPendingHandler {
@@ -675,26 +705,30 @@ impl CallHandler for SimpleHandler {
 
     fn handle_call(
         &mut self,
-        _address: message::Address,
-        args: Bytes,
-    ) -> impl Future<Output = Result<Bytes, Self::Error>> + Send + 'static {
-        let arg = from_slice::<HandlerValue>(&args).unwrap();
+        call: handler::Call,
+        _cancel: CancellationToken,
+    ) -> impl Future<Output = Result<handler::Reply, Self::Error>> + Send + 'static {
+        let arg = from_slice::<HandlerValue>(&call.payload).unwrap();
         match arg {
-            Ok(arg) => ok(to_bytes(&arg).unwrap()),
+            Ok(arg) => ok(handler::Reply::new(to_bytes(&arg).unwrap())),
             Err(error) => err(error),
         }
     }
 }
 
 impl EventHandler for SimpleHandler {
-    fn handle_event(&mut self, address: message::Address, args: Bytes) {
-        self.events.unbounded_send((address, args)).unwrap()
+    fn handle_event(&mut self, event: handler::Event) {
+        self.events
+            .unbounded_send((event.address, event.payload))
+            .unwrap()
     }
 }
 
 impl PostHandler for SimpleHandler {
-    fn handle_post(&mut self, address: message::Address, args: Bytes) {
-        self.posts.unbounded_send((address, args)).unwrap()
+    fn handle_post(&mut self, post: handler::Post) {
+        self.posts
+            .unbounded_send((post.address, post.payload))
+            .unwrap()
     }
 }
 

@@ -1,18 +1,27 @@
 use crate::{
+    handler::Reply,
     id::CreateId,
-    message::{Address, Id, Response},
+    message::{Address, Flags, Id, Response},
     Error, Message,
 };
 use bytes::Bytes;
-use futures::{stream::FusedStream, Stream};
+use futures::{
+    stream::{FusedStream, FuturesUnordered},
+    Stream, StreamExt,
+};
 use std::{
     collections::HashMap,
+    future::Future,
     pin::Pin,
     task::{ready, Context, Poll},
 };
 use tokio::sync::{mpsc, oneshot};
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
+/// A client of an endpoint, that sends requests to the peer of the endpoint.
+///
+/// Clients are cheap to clone. The endpoint messaging loop terminates when all clients associated
+/// with it are dropped and all pending server calls are answered.
 #[derive(Debug, Clone)]
 pub struct Client {
     requests: mpsc::Sender<Request>,
@@ -29,7 +38,16 @@ impl Client {
         }
     }
 
-    pub async fn call(&self, address: Address, args: Bytes) -> Result<Bytes, Error> {
+    /// Sends a call request and waits for its reply.
+    ///
+    /// Dropping the returned future before its completion sends a cancellation request for the
+    /// call to the peer.
+    pub async fn call(
+        &self,
+        address: Address,
+        payload: Bytes,
+        flags: Flags,
+    ) -> Result<Reply, Error> {
         let request_permit = self
             .requests
             .reserve()
@@ -40,7 +58,8 @@ impl Client {
         let drop_guard = cancel_token.clone().drop_guard();
         request_permit.send(Request::Call {
             address,
-            args,
+            payload,
+            flags,
             cancel_token,
             response_sender,
         });
@@ -51,18 +70,69 @@ impl Client {
         response?
     }
 
-    pub async fn send_event(&self, address: Address, args: Bytes) -> Result<(), Error> {
+    /// Sends an event notification.
+    pub async fn send_event(
+        &self,
+        address: Address,
+        payload: Bytes,
+        flags: Flags,
+    ) -> Result<(), Error> {
         self.requests
-            .send(Request::Event { address, args })
+            .send(Request::Event {
+                address,
+                payload,
+                flags,
+            })
             .await
             .map_err(client_dissociated_with_endpoint_error)
     }
 
-    pub async fn post(&self, address: Address, args: Bytes) -> Result<(), Error> {
+    /// Sends a post request.
+    pub async fn post(&self, address: Address, payload: Bytes, flags: Flags) -> Result<(), Error> {
         self.requests
-            .send(Request::Post { address, args })
+            .send(Request::Post {
+                address,
+                payload,
+                flags,
+            })
             .await
             .map_err(client_dissociated_with_endpoint_error)
+    }
+
+    /// Tries to send an event notification without waiting.
+    ///
+    /// Fails if the requests buffer is full or if the client is dissociated with its endpoint.
+    pub fn try_send_event(
+        &self,
+        address: Address,
+        payload: Bytes,
+        flags: Flags,
+    ) -> Result<(), Error> {
+        self.requests
+            .try_send(Request::Event {
+                address,
+                payload,
+                flags,
+            })
+            .map_err(client_dissociated_with_endpoint_error)
+    }
+
+    /// Tries to send a post request without waiting.
+    ///
+    /// Fails if the requests buffer is full or if the client is dissociated with its endpoint.
+    pub fn try_post(&self, address: Address, payload: Bytes, flags: Flags) -> Result<(), Error> {
+        self.requests
+            .try_send(Request::Post {
+                address,
+                payload,
+                flags,
+            })
+            .map_err(client_dissociated_with_endpoint_error)
+    }
+
+    /// Returns true if the client is still associated with its endpoint.
+    pub fn is_connected(&self) -> bool {
+        !self.requests.is_closed()
     }
 }
 
@@ -85,17 +155,20 @@ fn client_dissociated_with_endpoint_error<E>(_err: E) -> Error {
 enum Request {
     Call {
         address: Address,
-        args: Bytes,
+        payload: Bytes,
+        flags: Flags,
         cancel_token: CancellationToken,
-        response_sender: oneshot::Sender<Result<Bytes, Error>>,
+        response_sender: oneshot::Sender<Result<Reply, Error>>,
     },
     Post {
         address: Address,
-        args: Bytes,
+        payload: Bytes,
+        flags: Flags,
     },
     Event {
         address: Address,
-        args: Bytes,
+        payload: Bytes,
+        flags: Flags,
     },
 }
 
@@ -105,11 +178,38 @@ pub(crate) fn new_with_requests(requests_buffer_capacity: usize) -> (Client, Req
     (Client::new(sender), Requests::new(receiver))
 }
 
-#[derive(Debug)]
 pub(crate) struct Requests {
     id: CreateId,
     receiver: Option<mpsc::Receiver<Request>>,
     running_calls: HashMap<Id, CallState>,
+    /// Completes with the identifier of a running call when its cancellation is requested.
+    cancellations: FuturesUnordered<Cancellation>,
+}
+
+impl std::fmt::Debug for Requests {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Requests")
+            .field("running_calls", &self.running_calls)
+            .finish_non_exhaustive()
+    }
+}
+
+pin_project_lite::pin_project! {
+    struct Cancellation {
+        id: Id,
+        #[pin]
+        cancelled: WaitForCancellationFutureOwned,
+    }
+}
+
+impl Future for Cancellation {
+    type Output = Id;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        ready!(this.cancelled.poll(cx));
+        Poll::Ready(*this.id)
+    }
 }
 
 impl Requests {
@@ -118,6 +218,7 @@ impl Requests {
             id: CreateId::default(),
             receiver: Some(receiver),
             running_calls: HashMap::new(),
+            cancellations: FuturesUnordered::new(),
         }
     }
 
@@ -127,7 +228,7 @@ impl Requests {
         }) = self.running_calls.remove(&id)
         {
             let _res = response_sender.send(match response {
-                Response::Reply(value) => Ok(value),
+                Response::Reply(payload, flags) => Ok(Reply { payload, flags }),
                 Response::Error(error) => Err(Error::CallError(error)),
                 Response::Canceled => Err(Error::CallCanceled),
             });
@@ -139,23 +240,17 @@ impl Stream for Requests {
     type Item = Message;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Check if any call has been canceled.
-        if let Some(id) = self
-            .running_calls
-            .iter()
-            .find_map(|(id, call)| call.cancel_token.is_cancelled().then_some(id))
-            .copied()
-        {
-            let CallState {
-                id: call_id,
-                address,
-                ..
-            } = self.running_calls.remove(&id).unwrap();
-            return Poll::Ready(Some(Message::Cancel {
-                id: self.id.create(),
-                address,
-                call_id,
-            }));
+        // Check if any running call has been canceled.
+        while let Poll::Ready(Some(id)) = self.cancellations.poll_next_unpin(cx) {
+            // The call may have been answered since.
+            if let Some(CallState { address, .. }) = self.running_calls.remove(&id) {
+                // Cancel messages are addressed to the object, without action.
+                return Poll::Ready(Some(Message::Cancel {
+                    id: self.id.create(),
+                    address: address.with_action(Default::default()),
+                    call_id: id,
+                }));
+            }
         }
 
         match self.receiver {
@@ -165,34 +260,48 @@ impl Stream for Requests {
                     let message = match request {
                         Request::Call {
                             address,
-                            args,
+                            payload,
+                            flags,
                             cancel_token,
                             response_sender,
                         } => {
+                            self.cancellations.push(Cancellation {
+                                id,
+                                cancelled: cancel_token.clone().cancelled_owned(),
+                            });
                             self.running_calls.insert(
                                 id,
                                 CallState {
-                                    id,
                                     address,
                                     response_sender,
-                                    cancel_token,
                                 },
                             );
                             Message::Call {
                                 id,
                                 address,
-                                payload: args,
+                                payload,
+                                flags,
                             }
                         }
-                        Request::Post { address, args } => Message::Post {
+                        Request::Post {
+                            address,
+                            payload,
+                            flags,
+                        } => Message::Post {
                             id,
                             address,
-                            payload: args,
+                            payload,
+                            flags,
                         },
-                        Request::Event { address, args } => Message::Event {
+                        Request::Event {
+                            address,
+                            payload,
+                            flags,
+                        } => Message::Event {
                             id,
                             address,
-                            payload: args,
+                            payload,
+                            flags,
                         },
                     };
                     Poll::Ready(Some(message))
@@ -216,8 +325,6 @@ impl FusedStream for Requests {
 
 #[derive(Debug)]
 struct CallState {
-    id: Id,
     address: Address,
-    response_sender: oneshot::Sender<Result<Bytes, Error>>,
-    cancel_token: CancellationToken,
+    response_sender: oneshot::Sender<Result<Reply, Error>>,
 }

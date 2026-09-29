@@ -22,9 +22,22 @@ use url::Url;
 pub struct Target(Kind);
 
 impl Target {
-    #[cfg(test)]
+    /// A target relative to the session of a service.
     pub(crate) fn service(name: impl ToString) -> Self {
         Self(Kind::Service(name.to_string()))
+    }
+
+    /// The key that sorts targets by preference: relative targets first (the service directory
+    /// one before others), then loopback endpoints, then other endpoints.
+    pub(crate) fn preference_key(&self) -> (u8, String) {
+        match &self.0 {
+            Kind::Service(name) if name == crate::service_directory::SD_SERVICE_NAME => {
+                (0, String::new())
+            }
+            Kind::Service(name) => (1, name.clone()),
+            Kind::Endpoint(address) if address.is_machine_local() => (2, address.to_string()),
+            Kind::Endpoint(address) => (3, address.to_string()),
+        }
     }
 
     pub(crate) fn kind(&self) -> &Kind {

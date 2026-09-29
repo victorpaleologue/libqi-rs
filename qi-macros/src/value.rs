@@ -13,6 +13,8 @@ pub(crate) fn derive_impl(derive: Trait, input: DeriveInput) -> syn::Result<Toke
 pub(crate) struct Derive {
     derive_trait: Trait,
     name: Ident,
+    /// The name of the type in the `qi` type system, if different from the Rust name.
+    type_name: Option<String>,
     crate_path: Path,
     generics: Generics,
     data: ContainerData,
@@ -40,10 +42,18 @@ impl Derive {
         Ok(Self {
             derive_trait,
             name,
+            type_name: attrs.name,
             crate_path,
             generics,
             data,
         })
+    }
+
+    /// The name of the type in the `qi` type system.
+    fn type_name(&self) -> String {
+        self.type_name
+            .clone()
+            .unwrap_or_else(|| self.name.to_string())
     }
 
     fn derive_impl(&self) -> TokenStream {
@@ -189,7 +199,7 @@ impl Derive {
     }
 
     fn reflect_ty(&self, reflect: Reflect) -> TokenStream {
-        let name_str = self.name.to_string();
+        let name_str = self.type_name();
         let qi = &self.crate_path;
         match &self.data {
             ContainerData::Empty => reflect.convert_to_ty_result(quote!(#qi ::Type::Unit)),
@@ -413,6 +423,7 @@ struct DeriveAttributes {
     crate_path: Path,
     transparent: bool,
     case: Option<Case<'static>>,
+    name: Option<String>,
 }
 
 impl DeriveAttributes {
@@ -421,10 +432,12 @@ impl DeriveAttributes {
     ///     - crate = "..."
     ///     - transparent
     ///     - case = "..."
+    ///     - name = "..." (the name of the structure type in the `qi` type system)
     fn new(attrs: &[Attribute]) -> syn::Result<Self> {
         let mut crate_path = parse_quote!(::qi::value);
         let mut transparent = false;
         let mut case = None;
+        let mut name = None;
         for attr in attrs {
             if attr.path().is_ident("qi") {
                 attr.parse_nested_meta(|meta| {
@@ -441,6 +454,9 @@ impl DeriveAttributes {
                             } else if meta.path.is_ident("case") {
                                 case = Some(parse_case_attribute(&meta)?);
                                 Ok(())
+                            } else if meta.path.is_ident("name") {
+                                name = Some(parse_name_attribute(&meta)?);
+                                Ok(())
                             } else {
                                 Err(meta.error("unknown attribute"))
                             }
@@ -456,6 +472,7 @@ impl DeriveAttributes {
             crate_path,
             transparent,
             case,
+            name,
         })
     }
 }

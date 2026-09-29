@@ -15,6 +15,7 @@ bytes = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 once_cell = { workspace = true }
+pin-project-lite = { workspace = true }
 qi-format = { path = "../qi-format" }
 qi-macros = { path = "../qi-macros" }
 qi-messaging = { path = "../qi-messaging" }
@@ -36,3 +37,6 @@ ouroboros = "0.18.5"
 assert_matches = { workspace = true }
 serde_with = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-test = { workspace = true }
+tracing-subscriber = { workspace = true }
