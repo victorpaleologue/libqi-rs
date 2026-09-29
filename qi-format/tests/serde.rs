@@ -542,3 +542,40 @@ fn list_of_dynamics_round_trips_as_dynamic_elements() {
     let decoded: Dynamic<Value<'_>> = qi_format::from_slice(&bytes).unwrap();
     assert_eq!(decoded.0.into_owned(), list);
 }
+
+#[test]
+fn heterogeneous_lists_and_maps_write_dynamic_elements() {
+    use qi_value::{Dynamic, IntoValue, Map, Value};
+    // A list of values of different types is a list of dynamics on the wire.
+    let list = Value::List(vec![Value::Int32(1), "a".to_owned().into_value()]);
+    let bytes = qi_format::to_bytes(&Dynamic(list)).unwrap();
+    assert_eq!(
+        bytes.as_ref(),
+        [
+            3, 0, 0, 0, b'[', b'm', b']', 2, 0, 0, 0, 1, 0, 0, 0, b'i', 1, 0, 0, 0, 1, 0, 0, 0,
+            b's', 1, 0, 0, 0, b'a'
+        ]
+    );
+    let decoded: Dynamic<Value<'_>> = qi_format::from_slice(&bytes).unwrap();
+    assert_eq!(
+        decoded.0.into_owned(),
+        Value::List(vec![
+            Value::Dynamic(Box::new(Value::Int32(1))),
+            Value::Dynamic(Box::new("a".to_owned().into_value())),
+        ])
+    );
+    // Same for map values.
+    let mut map = Map::new();
+    map.insert("k".to_owned().into_value(), Value::Int32(1));
+    map.insert("s".to_owned().into_value(), Value::Bool(true));
+    let bytes = qi_format::to_bytes(&Dynamic(Value::Map(map))).unwrap();
+    assert_eq!(&bytes[..8], [4, 0, 0, 0, b'{', b's', b'm', b'}']);
+    let decoded: Dynamic<Value<'_>> = qi_format::from_slice(&bytes).unwrap();
+    let Value::Map(decoded) = decoded.0.into_owned() else {
+        panic!("not a map");
+    };
+    assert_eq!(
+        decoded.get(&"s".to_owned().into_value()),
+        Some(&Value::Dynamic(Box::new(Value::Bool(true))))
+    );
+}

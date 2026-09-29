@@ -425,8 +425,12 @@ async fn register_event(
                 break;
             };
             let state = &session.0;
-            let result = state
-                .bind_outgoing(params, service_id)
+            // Parameters are sent with the declared signature of the signal, whatever the
+            // types of the values emitted locally.
+            let result = params
+                .convert_to(signature.as_type())
+                .map_err(|err| Error::from(crate::error::ValueConversionError::Arguments(err)))
+                .and_then(|params| state.bind_outgoing(params, service_id))
                 .and_then(|params| state.encode(&params));
             let payload = match result {
                 Ok(payload) => payload,
@@ -439,7 +443,6 @@ async fn register_event(
                     continue;
                 }
             };
-            let _ = signature; // Parameters are always sent with their declared type.
             if state
                 .client
                 .send_event(address, payload, message::Flags::NONE)

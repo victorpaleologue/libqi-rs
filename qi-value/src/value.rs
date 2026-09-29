@@ -247,7 +247,9 @@ fn element_type(value: &Value<'_>) -> Option<Type> {
 
 /// The common type of the elements of a container, `None` (dynamic) if any element is dynamic
 /// or if their types differ.
-fn reduce_element_types<'a, 'v: 'a>(values: impl Iterator<Item = &'a Value<'v>>) -> Option<Type> {
+pub(crate) fn reduce_element_types<'a, 'v: 'a>(
+    values: impl Iterator<Item = &'a Value<'v>>,
+) -> Option<Type> {
     let mut types = Vec::new();
     for value in values {
         types.push(element_type(value)?);

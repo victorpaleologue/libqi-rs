@@ -385,8 +385,93 @@ pub struct ZipStructFieldsSizeError {
     pub element_count: usize,
 }
 
+/// The common type of two types, `None` if they have none.
+///
+/// Unknown element types (`None` inside a container type, as the element type of an empty
+/// list) unify with any element type: `[m]` and `[i]` have the common type `[i]`, so that the
+/// runtime types of tuples holding empty and non-empty lists agree.
 pub fn common_type(t1: Option<Type>, t2: Option<Type>) -> Option<Type> {
-    t1.zip(t2).filter(|(t1, t2)| t1 == t2).map(|(t1, _)| t1)
+    t1.zip(t2).and_then(|(t1, t2)| unify(t1, t2))
+}
+
+fn unify(t1: Type, t2: Type) -> Option<Type> {
+    Some(match (t1, t2) {
+        (t1, t2) if t1 == t2 => t1,
+        (Type::Option(e1), Type::Option(e2)) => Type::Option(unify_boxed(e1, e2)?),
+        (Type::List(e1), Type::List(e2)) => Type::List(unify_boxed(e1, e2)?),
+        (Type::VarArgs(e1), Type::VarArgs(e2)) => Type::VarArgs(unify_boxed(e1, e2)?),
+        (Type::Map { key: k1, value: v1 }, Type::Map { key: k2, value: v2 }) => Type::Map {
+            key: unify_boxed(k1, k2)?,
+            value: unify_boxed(v1, v2)?,
+        },
+        (Type::Tuple(t1), Type::Tuple(t2)) => Type::Tuple(unify_tuple(t1, t2)?),
+        _ => return None,
+    })
+}
+
+fn unify_element(e1: Option<Type>, e2: Option<Type>) -> Option<Option<Type>> {
+    match (e1, e2) {
+        (None, known) | (known, None) => Some(known),
+        (Some(e1), Some(e2)) => unify(e1, e2).map(Some),
+    }
+}
+
+fn unify_boxed(e1: Option<Box<Type>>, e2: Option<Box<Type>>) -> Option<Option<Box<Type>>> {
+    unify_element(e1.map(|e| *e), e2.map(|e| *e)).map(|e| e.map(Box::new))
+}
+
+fn unify_elements(e1: Vec<Option<Type>>, e2: Vec<Option<Type>>) -> Option<Vec<Option<Type>>> {
+    if e1.len() != e2.len() {
+        return None;
+    }
+    e1.into_iter()
+        .zip(e2)
+        .map(|(e1, e2)| unify_element(e1, e2))
+        .collect()
+}
+
+fn unify_tuple(t1: Tuple, t2: Tuple) -> Option<Tuple> {
+    Some(match (t1, t2) {
+        (Tuple::Tuple(e1), Tuple::Tuple(e2)) => Tuple::Tuple(unify_elements(e1, e2)?),
+        (
+            Tuple::TupleStruct {
+                name: n1,
+                elements: e1,
+            },
+            Tuple::TupleStruct {
+                name: n2,
+                elements: e2,
+            },
+        ) if n1 == n2 => Tuple::TupleStruct {
+            name: n1,
+            elements: unify_elements(e1, e2)?,
+        },
+        (
+            Tuple::Struct {
+                name: n1,
+                fields: f1,
+            },
+            Tuple::Struct {
+                name: n2,
+                fields: f2,
+            },
+        ) if n1 == n2 && f1.len() == f2.len() => {
+            let fields = f1
+                .into_iter()
+                .zip(f2)
+                .map(|(f1, f2)| {
+                    (f1.name == f2.name).then_some(()).and_then(|()| {
+                        Some(StructField {
+                            name: f1.name,
+                            ty: unify_element(f1.ty, f2.ty)?,
+                        })
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Tuple::Struct { name: n1, fields }
+        }
+        _ => return None,
+    })
 }
 
 pub fn reduce_type<C>(c: C) -> Option<Type>
@@ -404,4 +489,36 @@ where
         .map(|(k, v)| (Some(k), Some(v)))
         .reduce(|(ck, cv), (k, v)| (common_type(ck, k), common_type(cv, v)))
         .unwrap_or((None, None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_element_types_unify() {
+        let empty_list = Type::List(None);
+        let int_list = Type::List(Some(Box::new(Type::Int32)));
+        assert_eq!(
+            reduce_type([empty_list.clone(), int_list.clone(), empty_list.clone()]),
+            Some(int_list.clone())
+        );
+        assert_eq!(
+            reduce_type([empty_list.clone(), empty_list.clone()]),
+            Some(empty_list.clone())
+        );
+        assert_eq!(
+            reduce_type([int_list.clone(), Type::List(Some(Box::new(Type::String)))]),
+            None
+        );
+        // Tuples holding empty and non-empty lists have a common type.
+        let t1 = Type::Tuple(Tuple::Tuple(vec![Some(Type::Int32), Some(empty_list)]));
+        let t2 = Type::Tuple(Tuple::Tuple(vec![
+            Some(Type::Int32),
+            Some(int_list.clone()),
+        ]));
+        assert_eq!(reduce_type([t1, t2.clone()]), Some(t2));
+        assert_eq!(reduce_type([Type::Int32, Type::String]), None);
+        assert_eq!(reduce_type([Type::Int32, Type::Int32]), Some(Type::Int32));
+    }
 }
