@@ -562,21 +562,11 @@ mod tests {
         assert_eq!(meta.service_added, ActionId(106));
         assert_eq!(meta.service_removed, ActionId(107));
         assert_eq!(meta.machine_id, ActionId(108));
-        let sig = |id| {
-            meta.object
-                .methods
-                .get(&id)
-                .unwrap()
-                .parameters_signature
-                .to_string()
-        };
+        let sig = |id| meta.object.methods[&id].parameters_signature.to_string();
         assert_eq!(sig(meta.service), "(s)");
         assert_eq!(sig(meta.unregister_service), "(I)");
         assert_eq!(
-            meta.object
-                .signals
-                .get(&meta.service_added)
-                .unwrap()
+            meta.object.signals[&meta.service_added]
                 .signature
                 .to_string(),
             "(Is)"

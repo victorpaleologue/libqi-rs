@@ -104,7 +104,7 @@ impl_reflect!(impl for f32 => Float32);
 
 impl ToValue for f32 {
     fn to_value(&self) -> Value<'_> {
-        self.into_value()
+        (*self).into_value()
     }
 }
 
@@ -132,7 +132,7 @@ impl_reflect!(impl for f64 => Float64);
 
 impl ToValue for f64 {
     fn to_value(&self) -> Value<'_> {
-        self.into_value()
+        (*self).into_value()
     }
 }
 
@@ -160,7 +160,7 @@ impl_reflect!(impl<T> for std::marker::PhantomData<T> => Unit);
 
 impl<T> ToValue for std::marker::PhantomData<T> {
     fn to_value(&self) -> Value<'_> {
-        self.into_value()
+        (*self).into_value()
     }
 }
 
@@ -182,7 +182,7 @@ impl_reflect!(impl for char => String);
 
 impl ToValue for char {
     fn to_value(&self) -> Value<'_> {
-        self.into_value()
+        (*self).into_value()
     }
 }
 

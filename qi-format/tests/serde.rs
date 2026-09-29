@@ -2,7 +2,7 @@ use pretty_assertions::assert_eq;
 use qi_format::{from_slice, to_bytes};
 use qi_value::{
     object::{self, ActionId, MetaMethod, MetaObject, MetaProperty, MetaSignal, Object},
-    os, service, Dynamic, Map, Reflect, Signature, Type,
+    os, service, Dynamic, Reflect, Signature, Type,
 };
 use serde_with::serde_as;
 use std::{collections::BTreeMap, str::FromStr};
@@ -191,7 +191,7 @@ fn object_descr_from_to_format() {
         object,
         Object::new(
             MetaObject {
-                methods: Map::from_iter([
+                methods: BTreeMap::from_iter([
                     (
                         ActionId(0),
                         MetaMethod {
@@ -445,7 +445,7 @@ fn object_descr_from_to_format() {
                         },
                     ),
                 ]),
-                signals: Map::from_iter([
+                signals: BTreeMap::from_iter([
                     (
                         ActionId(86),
                         MetaSignal {
@@ -482,7 +482,7 @@ fn object_descr_from_to_format() {
                         },
                     ),
                 ]),
-                properties: Map::from_iter([(
+                properties: BTreeMap::from_iter([(
                     ActionId(103),
                     MetaProperty {
                         uid: ActionId(103),

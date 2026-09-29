@@ -19,3 +19,5 @@ pretty_assertions = { workspace = true }
 qi-value = { path = "../qi-value" }
 serde-value = { workspace = true }
 serde_with = { workspace = true }
+qi-macros = { path = "../qi-macros" }
+serde_json = { workspace = true }

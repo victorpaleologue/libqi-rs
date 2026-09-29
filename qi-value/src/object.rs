@@ -1,6 +1,6 @@
-use crate::{os, service, ty, FromValue, FromValueError, IntoValue, Map, Signature, Type, Value};
+use crate::{os, service, ty, FromValue, FromValueError, IntoValue, Signature, Type, Value};
 use sha1_smol::Sha1;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 /// An opaque handle to the entity an [`Object`] reference points to.
 ///
@@ -448,9 +448,11 @@ impl Iterator for ActionId {
 )]
 #[qi(value(crate = "crate"))]
 pub struct MetaObject {
-    pub methods: Map<ActionId, MetaMethod>,
-    pub signals: Map<ActionId, MetaSignal>,
-    pub properties: Map<ActionId, MetaProperty>,
+    // Members are kept sorted by identifier: this is the order the reference implementation
+    // (`std::map`) serializes them in.
+    pub methods: BTreeMap<ActionId, MetaMethod>,
+    pub signals: BTreeMap<ActionId, MetaSignal>,
+    pub properties: BTreeMap<ActionId, MetaProperty>,
     pub description: String,
 }
 
@@ -506,13 +508,16 @@ impl MetaObjectBuilder {
     pub fn add_property(&mut self, property: MetaProperty) -> &mut Self {
         let uid = property.uid;
         self.meta_object.properties.insert(uid, property.clone());
-        // Properties are also signals
+        // Properties are also signals of their changes. The signature of a signal is the tuple
+        // of its parameters: a property of type `T` has the signal signature `(T)`.
+        let signal_signature =
+            Signature::new(Some(Type::tuple_of([property.signature.into_type()])));
         self.meta_object.signals.insert(
             uid,
             MetaSignal {
                 uid,
                 name: property.name,
-                signature: property.signature,
+                signature: signal_signature,
             },
         );
         self
@@ -599,11 +604,22 @@ impl MetaMethodBuilder {
     }
 
     pub fn build(self) -> MetaMethod {
-        let (parameters, parameter_types) = self
+        let (parameters, parameter_types): (Vec<MetaMethodParameter>, Vec<Option<Type>>) = self
             .parameters
             .into_iter()
             .map(|parameter| (parameter.parameter, parameter.ty))
             .unzip();
+        // The reference implementation only lists the parameters that were documented (given a
+        // name or a description). Parameters that were only typed are described by the parameters
+        // signature alone.
+        let parameters = if parameters
+            .iter()
+            .all(|parameter| parameter.name.is_empty() && parameter.description.is_empty())
+        {
+            Vec::new()
+        } else {
+            parameters
+        };
         let parameters_tuple = ty::Type::Tuple(ty::Tuple::Tuple(parameter_types));
         let parameters_signature = Signature::new(Some(parameters_tuple));
         MetaMethod {

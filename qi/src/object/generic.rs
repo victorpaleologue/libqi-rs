@@ -120,7 +120,7 @@ mod tests {
     fn special_members_signatures() {
         let meta = meta_object();
         let sig = |id: ActionId| {
-            let m = meta.methods.get(&id).unwrap();
+            let m = &meta.methods[&id];
             (
                 m.name.clone(),
                 m.parameters_signature.to_string(),

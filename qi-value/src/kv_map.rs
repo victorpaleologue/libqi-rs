@@ -1,7 +1,16 @@
 use crate::{AsDynamicOwned, FromValue, FromValueError, IntoValue, Reflect, Type, Value};
 use serde_with::serde_as;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
+/// A map of string keys to dynamic values, of signature `{sm}`.
+///
+/// This is the type of capability maps and authentication parameters of the protocol.
+///
+/// # Order
+///
+/// Entries are kept sorted by key. This is the order the reference implementation (a
+/// `std::map<std::string, AnyValue>`) uses on the wire, so that a map serialized by this
+/// implementation is byte-identical to the one the reference implementation would produce.
 #[serde_as]
 #[derive(
     Default,
@@ -17,7 +26,7 @@ use std::collections::HashMap;
 )]
 #[into_iterator(owned, ref, ref_mut)]
 pub struct KeyDynValueMap(
-    #[serde_as(as = "HashMap<_, AsDynamicOwned>")] HashMap<String, Value<'static>>,
+    #[serde_as(as = "BTreeMap<_, AsDynamicOwned>")] BTreeMap<String, Value<'static>>,
 );
 
 impl KeyDynValueMap {
@@ -25,11 +34,11 @@ impl KeyDynValueMap {
         Self::default()
     }
 
-    pub fn as_hash_map(&self) -> &HashMap<String, Value<'static>> {
+    pub fn as_map(&self) -> &BTreeMap<String, Value<'static>> {
         &self.0
     }
 
-    pub fn as_hash_map_mut(&mut self) -> &mut HashMap<String, Value<'static>> {
+    pub fn as_map_mut(&mut self) -> &mut BTreeMap<String, Value<'static>> {
         &mut self.0
     }
 
@@ -44,7 +53,7 @@ impl KeyDynValueMap {
     pub fn remove<K>(&mut self, key: &K) -> Option<Value<'static>>
     where
         String: std::borrow::Borrow<K>,
-        K: std::hash::Hash + Eq + ?Sized,
+        K: Ord + ?Sized,
     {
         self.0.remove(key)
     }
@@ -52,7 +61,7 @@ impl KeyDynValueMap {
     pub fn get<K>(&self, key: &K) -> Option<&Value<'static>>
     where
         String: std::borrow::Borrow<K>,
-        K: std::hash::Hash + Eq + ?Sized,
+        K: Ord + ?Sized,
     {
         self.0.get(key)
     }
@@ -60,7 +69,7 @@ impl KeyDynValueMap {
     pub fn get_as<K, T>(&self, key: &K) -> Option<T>
     where
         String: std::borrow::Borrow<K>,
-        K: std::hash::Hash + Eq + ?Sized,
+        K: Ord + ?Sized,
         T: FromValue<'static>,
     {
         self.0

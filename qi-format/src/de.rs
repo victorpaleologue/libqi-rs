@@ -363,7 +363,7 @@ impl<'data> serde::Deserializer<'data> for SliceDeserializer<'data> {
     where
         V: serde::de::Visitor<'data>,
     {
-        self.by_ref().deserialize_u8(visitor)
+        self.by_ref().deserialize_u16(visitor)
     }
 
     fn deserialize_u32<V>(mut self, visitor: V) -> std::result::Result<V::Value, Self::Error>
