@@ -1,4 +1,4 @@
-From 7ca4be24264a3d72bcd4a1e5e82245b38fe45331 Mon Sep 17 00:00:00 2001
+From c3a62649f8b437366924010e2899831e9dbb3890 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Tue, 29 Sep 2026 17:30:13 +0000
 Subject: [PATCH] Add arora-hal-naoqi: NAO and Pepper as Arora devices over
@@ -19,6 +19,7 @@ Claude-Session: https://claude.ai/code/session_01RzWNCNTKysjou8kURpK8Th
  crates/arora-hal-naoqi/CHANGELOG.md           |  19 +
  crates/arora-hal-naoqi/Cargo.toml             |  39 ++
  crates/arora-hal-naoqi/configs/nao.json       |   8 +
+ .../arora-hal-naoqi/examples/naoqi_probe.rs   |  56 ++
  crates/arora-hal-naoqi/readme.md              |  35 +
  crates/arora-hal-naoqi/src/bin/arora-naoqi.rs |  41 ++
  crates/arora-hal-naoqi/src/config.rs          | 230 +++++++
@@ -31,10 +32,11 @@ Claude-Session: https://claude.ai/code/session_01RzWNCNTKysjou8kURpK8Th
  crates/arora-hal-naoqi/src/naoqi_hal.rs       | 607 ++++++++++++++++++
  .../arora-hal-naoqi/tests/fake_naoqi/mod.rs   | 343 ++++++++++
  crates/arora-hal-naoqi/tests/hal.rs           | 271 ++++++++
- 17 files changed, 2386 insertions(+), 17 deletions(-)
+ 18 files changed, 2442 insertions(+), 17 deletions(-)
  create mode 100644 crates/arora-hal-naoqi/CHANGELOG.md
  create mode 100644 crates/arora-hal-naoqi/Cargo.toml
  create mode 100644 crates/arora-hal-naoqi/configs/nao.json
+ create mode 100644 crates/arora-hal-naoqi/examples/naoqi_probe.rs
  create mode 100644 crates/arora-hal-naoqi/readme.md
  create mode 100644 crates/arora-hal-naoqi/src/bin/arora-naoqi.rs
  create mode 100644 crates/arora-hal-naoqi/src/config.rs
@@ -796,6 +798,68 @@ index 0000000..e15adf1
 +  "sensor_period_ms": 50,
 +  "joint_speed_fraction": 0.3,
 +  "sensors": { "joints": true, "battery": true, "inertial": true, "sonar": true, "touch": true }
++}
+diff --git a/crates/arora-hal-naoqi/examples/naoqi_probe.rs b/crates/arora-hal-naoqi/examples/naoqi_probe.rs
+new file mode 100644
+index 0000000..40920e0
+--- /dev/null
++++ b/crates/arora-hal-naoqi/examples/naoqi_probe.rs
+@@ -0,0 +1,56 @@
++//! Probes a NAOqi robot (or `naoqi-sim`) through the HAL: describes it, streams a few seconds
++//! of updates, then commands a joint, says a sentence and lights the face LEDs.
++//!
++//! Usage: `cargo run -p arora-hal-naoqi --example naoqi_probe -- tcp://127.0.0.1:9559`
++
++use std::time::Duration;
++
++use arora_hal::Hal;
++use arora_hal_naoqi::{keys, NaoqiHal, NaoqiRobotConfig};
++use arora_types::data::{Key, StateChange};
++use arora_types::value::Value;
++use futures::StreamExt;
++
++#[tokio::main]
++async fn main() -> Result<(), Box<dyn std::error::Error>> {
++    let url = std::env::args()
++        .nth(1)
++        .unwrap_or_else(|| "tcp://127.0.0.1:9559".to_string());
++    let hal = NaoqiHal::new(NaoqiRobotConfig::with_url(url)).await?;
++    println!("description: {:?}", hal.describe().await);
++
++    let mut updates = hal.updates();
++    let mut received = 0usize;
++    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
++    while let Ok(Some(change)) = tokio::time::timeout_at(deadline, updates.next()).await {
++        received += change.len();
++        for key in [
++            "head_yaw.position",
++            "battery.charge",
++            "imu.angle.x",
++            "sonar.left.distance",
++        ] {
++            if let Some(value) = change.set.get(&Key::from(key)) {
++                println!("{key} = {value:?}");
++            }
++        }
++    }
++    println!("{received} key updates in 2 seconds");
++
++    let mut change = StateChange::set("head_yaw.target_position", Value::F64(0.4));
++    change
++        .set
++        .insert(Key::from(keys::TEXT), Some(Value::from("Hello from Arora")));
++    change.set.insert(
++        Key::from("led.FaceLeds.color"),
++        Some(Value::U32(0x0000_ff00)),
++    );
++    hal.write(change).await?;
++    tokio::time::sleep(Duration::from_secs(2)).await;
++    let read = hal
++        .read(&[Key::from("head_yaw.position"), Key::from(keys::TEXT)])
++        .await?;
++    println!("head_yaw.position after the command: {:?}", read[0]);
++    println!("text after speaking (unset once said): {:?}", read[1]);
++    Ok(())
 +}
 diff --git a/crates/arora-hal-naoqi/readme.md b/crates/arora-hal-naoqi/readme.md
 new file mode 100644
