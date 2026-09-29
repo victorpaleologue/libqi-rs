@@ -28,3 +28,7 @@ path = "client.rs"
 [[example]]
 name = "server"
 path = "server.rs"
+
+[[example]]
+name = "typed_calculator"
+path = "typed_calculator.rs"
