@@ -1,6 +1,6 @@
-# libqi-rs
+# libqi-rs-vibe
 
-A Rust implementation of the `qi` framework, the middleware of Aldebaran's NAO and
+A Rust implementation of the `qi` framework (a fork of [libqi-rs](https://github.com/nyibbang/libqi-rs)), the middleware of Aldebaran's NAO and
 Pepper robots (`libqi`, qimessaging), byte-compatible with the C++ implementation.
 
 With it, Rust programs talk to NAOqi robots and to any `libqi` process: they call
@@ -8,6 +8,20 @@ services, subscribe to signals, read and write properties, expose their own serv
 objects, or even host a service directory. The wire format is verified byte for byte
 against `libqi` 4.0.5, and the implementation is exercised against C++ `libqi`
 processes as client, service and service directory.
+
+## Installing
+
+```toml
+[dependencies]
+qi = { package = "libqi", version = "0.1" }   # used as `qi` in code
+```
+
+The package is `libqi` on crates.io because the name `qi` is taken; the library itself is
+named `qi`, so `use qi::...` works as in the examples. The command-line tools install with
+`cargo install qi-tools` (the `qi-cli` command) and `cargo install naoqi-sim`; prebuilt
+binaries are attached to the [releases](https://github.com/victorpaleologue/libqi-rs-vibe/releases).
+Releases are described in [`CHANGELOG.md`](CHANGELOG.md) and made as explained in
+[`docs/releasing.md`](docs/releasing.md).
 
 ## Crates
 

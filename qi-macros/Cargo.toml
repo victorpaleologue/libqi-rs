@@ -1,11 +1,16 @@
 [package]
 name = "qi-macros"
+description = "Procedural macros of the qi framework: #[qi::object] and the value derives"
 
 edition.workspace = true
 license-file.workspace = true
 authors.workspace = true
 version.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [lib]
 proc-macro = true
@@ -20,5 +25,5 @@ convert_case = "0.10.0"
 assert_matches = { workspace = true }
 syn = { workspace = true }
 pretty_assertions = { workspace = true }
-qi-macros = { path = "../qi-macros" }
-qi-value = { path = "../qi-value" }
+qi-macros = { path = "../qi-macros" }  # path only: dropped on publish, avoids a dev-dependency cycle
+qi-value = { path = "../qi-value" }  # path only: dropped on publish, avoids a dev-dependency cycle

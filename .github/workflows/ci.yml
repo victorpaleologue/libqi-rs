@@ -32,6 +32,15 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  release-check:
+    name: Packages can be published
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --workspace --dry-run
+
   msrv:
     name: Minimum supported Rust version
     runs-on: ubuntu-latest

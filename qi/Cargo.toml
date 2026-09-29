@@ -1,12 +1,21 @@
 [package]
-name = "qi"
-description = ""
+name = "libqi"
+description = "The qi framework of NAOqi robots (libqi, qimessaging) in Rust: sessions, services, objects, signals and properties, byte-compatible with the C++ implementation"
 
 edition.workspace = true
 license-file.workspace = true
 authors.workspace = true
 version.workspace = true
 rust-version.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+# The package is `libqi` on crates.io (`qi` is taken); the library is used as `qi`.
+name = "qi"
 
 [dependencies]
 async-trait = { workspace = true }
@@ -16,10 +25,10 @@ either = { workspace = true }
 futures = { workspace = true }
 once_cell = { workspace = true }
 pin-project-lite = { workspace = true }
-qi-format = { path = "../qi-format" }
-qi-macros = { path = "../qi-macros" }
-qi-messaging = { path = "../qi-messaging" }
-qi-value = { path = "../qi-value" }
+qi-format = { workspace = true }
+qi-macros = { workspace = true }
+qi-messaging = { workspace = true }
+qi-value = { workspace = true }
 sealed = { workspace = true }
 serde = { workspace = true }
 serde_with = { workspace = true }

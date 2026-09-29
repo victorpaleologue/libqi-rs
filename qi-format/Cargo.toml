@@ -7,6 +7,11 @@ license-file.workspace = true
 authors.workspace = true
 version.workspace = true
 rust-version.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 bytes = { workspace = true }
@@ -16,8 +21,8 @@ thiserror = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
-qi-value = { path = "../qi-value" }
+qi-value = { path = "../qi-value" }  # path only: dropped on publish, avoids a dev-dependency cycle
 serde-value = { workspace = true }
 serde_with = { workspace = true }
-qi-macros = { path = "../qi-macros" }
+qi-macros = { path = "../qi-macros" }  # path only: dropped on publish, avoids a dev-dependency cycle
 serde_json = { workspace = true }
