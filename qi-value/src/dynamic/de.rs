@@ -38,11 +38,18 @@ impl<'de> serde::de::Visitor<'de> for DynamicVisitor {
     {
         use serde::de::Error;
 
-        // Signature
-        let signature: Signature = seq
+        // Signature. The reference implementation serializes an invalid (empty) dynamic value as an
+        // empty signature followed by no value at all: it is decoded as a unit.
+        let signature: String = seq
             .next_element()?
             .ok_or_else(|| Error::invalid_length(0, &self))?;
-        let value_type = signature.into_type();
+        if signature.is_empty() {
+            return Ok(Value::Unit);
+        }
+        let value_type = signature
+            .parse::<Signature>()
+            .map_err(Error::custom)?
+            .into_type();
 
         // Value
         let value = seq
@@ -67,11 +74,21 @@ impl<'de> serde::de::Visitor<'de> for DynamicVisitor {
         }
         use serde::de::Error;
 
-        let signature: Signature = match map.next_key()? {
+        let signature: String = match map.next_key()? {
             Some(Field::Signature) => map.next_value(),
             _ => Err(Error::missing_field("signature")),
         }?;
-        let value_type = signature.into_type();
+        if signature.is_empty() {
+            // An empty dynamic value carries no value: ignore it if present.
+            if let Some(Field::Value) = map.next_key()? {
+                map.next_value::<serde::de::IgnoredAny>()?;
+            }
+            return Ok(Value::Unit);
+        }
+        let value_type = signature
+            .parse::<Signature>()
+            .map_err(Error::custom)?
+            .into_type();
         let value = match map.next_key()? {
             Some(Field::Value) => map.next_value_seed(
                 ValueType::new(value_type.as_ref())
@@ -142,6 +159,14 @@ where
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn empty_signature_is_unit() {
+        let value = deserialize_value(json!({ "signature": "", "value": null })).unwrap();
+        assert_eq!(value, Value::Unit);
+        let value = deserialize_value(json!({ "signature": "" })).unwrap();
+        assert_eq!(value, Value::Unit);
+    }
 
     #[test]
     fn u32_from_json_number() {

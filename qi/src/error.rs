@@ -146,13 +146,15 @@ impl messaging::handler::CallError for HandlerError {
 }
 
 impl From<Error> for HandlerError {
+    /// Errors of object method calls are replied to the caller and are never fatal to the
+    /// messaging loop: a failing method must not close the link to the caller.
     fn from(err: Error) -> Self {
         if let Error::CallCanceled = err {
             return Self::CallCanceled;
         }
         Self::Custom {
             message: err.to_string(),
-            is_fatal: true,
+            is_fatal: false,
         }
     }
 }
