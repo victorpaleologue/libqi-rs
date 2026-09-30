@@ -1,144 +1,130 @@
+//! Transport channels: connecting to and serving endpoints, framing messages.
+
+mod tls;
+
+pub use self::tls::{CERTIFICATE_ENV, PRIVATE_KEY_ENV};
 use crate::{
-    client, format,
-    message::{
-        self,
-        codec::{DecodeError, Decoder, EncodeError, Encoder},
-    },
-    messaging::{
-        self, CallTermination, CallWithId, NotificationWithId, Reply, RequestWithId, Service,
-    },
-    server,
+    address::{Address, SslKind},
+    DecodeError, Decoder, EncodeError, Encoder, Message,
 };
-use futures::{SinkExt, StreamExt};
-use std::fmt::Debug;
+use async_stream::stream;
+use futures::{Sink, Stream};
+use std::pin::Pin;
 use tokio::{
-    io::{split, AsyncRead, AsyncWrite},
-    pin, select,
-    sync::mpsc,
+    io::{AsyncRead, AsyncWrite},
+    net::{TcpListener, TcpStream},
 };
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::{
-    codec::{FramedRead, FramedWrite},
-    sync::{PollSendError, PollSender},
-};
-use tracing::trace;
+use tokio_util::codec::{FramedRead, FramedWrite};
+use tracing::debug;
 
-pub(crate) fn open<IO, Svc>(
-    io: IO,
-    service: Svc,
-) -> (
-    client::Client,
-    impl std::future::Future<Output = Result<(), Error<Svc::CallReply, Svc::Error>>>,
-)
-where
-    IO: AsyncWrite + AsyncRead,
-    Svc: Service<CallWithId, NotificationWithId>,
-    Svc::Error: ToString + std::fmt::Debug + Send + 'static,
-    Svc::CallReply: Into<format::Value> + Send + 'static,
-{
-    let (input, output) = split(io);
-    let mut stream = FramedRead::new(input, Decoder::new()).fuse();
-    let mut sink = FramedWrite::new(output, Encoder);
+type BoxRead = Pin<Box<dyn AsyncRead + Send>>;
+type BoxWrite = Pin<Box<dyn AsyncWrite + Send>>;
 
-    const DISPATCH_CHANNEL_SIZE: usize = 1;
-    let (client_responses_tx, client_responses_rx) = mpsc::channel(DISPATCH_CHANNEL_SIZE);
-    let (client_requests_tx, mut client_requests_rx) = mpsc::channel(DISPATCH_CHANNEL_SIZE);
-    let (server_requests_tx, server_requests_rx) = mpsc::channel(DISPATCH_CHANNEL_SIZE);
-    let (server_responses_tx, mut server_responses_rx) = mpsc::channel(DISPATCH_CHANNEL_SIZE);
-
-    let (client, client_dispatch) = client::setup(
-        ReceiverStream::new(client_responses_rx),
-        PollSender::new(client_requests_tx),
-    );
-    let server = server::serve(
-        ReceiverStream::new(server_requests_rx),
-        PollSender::new(server_responses_tx),
-        service,
-    );
-
-    let dispatch = async move {
-        pin!(client_dispatch, server);
-        loop {
-            select! {
-                Some(message) = stream.next() => {
-                    let message = message?;
-                    // Ignore the results of send, it occurs when the client or server dropped the
-                    // request or response stream, which means that their task have terminated.
-                    match RequestWithId::try_from_message(message).map_err(Error::MessageIntoRequest)? {
-                        Ok(request) => {
-                            let _res = server_requests_tx.send(request).await;
-                        }
-                        Err(message) => {
-                            let id = message.id();
-                            let send_response = match message.kind() {
-                                message::Kind::Reply => {
-                                    let reply = Reply::new(message.into_content());
-                                    client_responses_tx.send((id, Ok(reply)))
-                                },
-                                message::Kind::Canceled => {
-                                    client_responses_tx.send((id, Err(CallTermination::Canceled)))
-                                },
-                                message::Kind::Error => {
-                                    let error_description = message.deserialize_error_description().map_err(Error::GetErrorDescription)?;
-                                    let error = messaging::Error(error_description);
-                                    client_responses_tx.send((id, Err(CallTermination::Error(error))))
-                                },
-                                // Either a message is a request, or it is a call response.
-                                // There are no other cases.
-                                _ => unreachable!(),
-                            };
-                            let _res = send_response.await;
-                        },
-                    }
-                }
-                Some(request) = client_requests_rx.recv() => {
-                    let message = request.try_into().map_err(Error::RequestIntoMessage)?;
-                    sink.send(message).await?;
-                }
-                Some(response) = server_responses_rx.recv() => {
-                    let message = response.try_into().map_err(Error::ResponseIntoMessage)?;
-                    sink.send(message).await?;
-                }
-                res = &mut client_dispatch => {
-                    res.map_err(Error::ClientDispatch)?;
-                    trace!("client dispatch has terminated with success");
-                    break Ok(());
-                }
-                res = &mut server => {
-                    res.map_err(Error::Server)?;
-                    trace!("server has terminated with success");
-                    break Ok(());
-                }
-            }
-        }
-    };
-
-    (client, dispatch)
+fn unsupported(what: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Unsupported, what.to_owned())
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum Error<SvcRep, SvcErr> {
-    #[error("messaging decoding error")]
-    Decode(#[from] DecodeError),
+/// Connects to an endpoint, returning the stream of incoming messages and the sink of outgoing
+/// messages.
+pub async fn connect(
+    address: Address,
+) -> Result<
+    (
+        impl Stream<Item = Result<Message, DecodeError>>,
+        impl Sink<Message, Error = EncodeError>,
+    ),
+    std::io::Error,
+> {
+    let (read, write): (BoxRead, BoxWrite) = match address {
+        Address::Tcp { address, ssl: None } => {
+            let (read, write) = TcpStream::connect(address).await?.into_split();
+            (Box::pin(read), Box::pin(write))
+        }
+        Address::Tcp {
+            address,
+            ssl: Some(SslKind::Simple),
+        } => {
+            let tcp = TcpStream::connect(address).await?;
+            let (read, write) = tokio::io::split(tls::connect(tcp, address).await?);
+            (Box::pin(read), Box::pin(write))
+        }
+        Address::Tcp {
+            ssl: Some(SslKind::Mutual),
+            ..
+        } => {
+            return Err(unsupported(
+                "connecting with mutual TLS authentication (tcpsm) is not supported",
+            ))
+        }
+    };
+    let stream = FramedRead::new(read, Decoder::default());
+    let sink = FramedWrite::new(write, Encoder);
+    Ok((stream, sink))
+}
 
-    #[error("message encoding error")]
-    Encode(#[from] EncodeError),
-
-    #[error("client dispatch error")]
-    ClientDispatch(#[source] PollSendError<RequestWithId>),
-
-    #[error("server error")]
-    Server(#[source] PollSendError<server::Response<SvcRep, SvcErr>>),
-
-    #[error("error converting a message into a request")]
-    MessageIntoRequest(#[source] format::Error),
-
-    #[error("error converting an error message content into an error description")]
-    GetErrorDescription(#[source] message::GetErrorDescriptionError),
-
-    #[error("error converting a client request into a message")]
-    RequestIntoMessage(#[source] format::Error),
-
-    #[error("error converting as server response into a message")]
-    ResponseIntoMessage(#[source] format::Error),
+/// Binds a server to an address, returning the stream of connecting clients (each as a stream of
+/// incoming messages, a sink of outgoing messages and the address of the client) and the local
+/// address the server is bound to.
+pub async fn serve(
+    address: Address,
+) -> Result<
+    (
+        impl Stream<
+            Item = (
+                impl Stream<Item = Result<Message, DecodeError>>,
+                impl Sink<Message, Error = EncodeError>,
+                Address,
+            ),
+        >,
+        Address,
+    ),
+    std::io::Error,
+> {
+    let Address::Tcp { address, ssl } = address;
+    let acceptor = match ssl {
+        None => None,
+        Some(SslKind::Simple) => Some(tls::acceptor()?),
+        Some(SslKind::Mutual) => {
+            return Err(unsupported(
+                "serving with mutual TLS authentication (tcpsm) is not supported",
+            ))
+        }
+    };
+    let listener = TcpListener::bind(address).await?;
+    let endpoint = listener
+        .local_addr()
+        .map(|address| Address::Tcp { address, ssl })
+        .unwrap_or(Address::Tcp { address, ssl });
+    let clients = stream! {
+        loop {
+            // TODO: Handle case when accept returns an error that is fatal for this listener.
+            let Ok((socket, address)) = listener.accept().await else {
+                continue;
+            };
+            let (read, write): (BoxRead, BoxWrite) = match &acceptor {
+                None => {
+                    let (read, write) = socket.into_split();
+                    (Box::pin(read), Box::pin(write))
+                }
+                Some(acceptor) => match acceptor.accept(socket).await {
+                    Ok(stream) => {
+                        let (read, write) = tokio::io::split(stream);
+                        (Box::pin(read), Box::pin(write))
+                    }
+                    Err(error) => {
+                        debug!(
+                            %address,
+                            error = &error as &dyn std::error::Error,
+                            "TLS handshake failed"
+                        );
+                        continue;
+                    }
+                },
+            };
+            let stream = FramedRead::new(read, Decoder::default());
+            let sink = FramedWrite::new(write, Encoder);
+            yield (stream, sink, Address::Tcp { address, ssl });
+        }
+    };
+    Ok((clients, endpoint))
 }

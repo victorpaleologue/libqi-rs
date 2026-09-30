@@ -1,32 +1,41 @@
 [package]
 name = "qi-messaging"
-description = ""
+description = "The qi messaging protocol: message framing, TCP and TLS channels, client and server loops"
 
-license-file = "../LICENSE.txt"
-repository = "https://github.com/nyibbang/libqi-rs"
-version = "0.1.0-dev"
-edition = "2021"
-rust-version = "1.63"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+version.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-bytes = { version = "1.4.0", features = ["serde"] }
-derive_more = "0.99.17"
-derive-new = "0.5.9"
-futures = "0.3.27"
-num-derive = "0.3.3"
-num-traits = "0.2.15"
-serde = { version = "1.0.152", features = ["derive"] }
-thiserror = "1.0.39"
-tokio = { version = "1.26.0", features = ["io-util", "sync", "macros", "rt"] }
-tracing = "0.1.37"
-tokio-util = { version = "0.7.7", features = ["codec"] }
-qi-types = { path = "../qi-types" }
-qi-format = { path = "../qi-format" }
-bitflags = "1.3.2"
-tokio-stream = { version = "0.1.14", default-features = false }
-pin-project-lite = "0.2.9"
-once_cell = "1.17.2"
+async-stream = { workspace = true }
+bytes = { workspace = true }
+derive_more = { workspace = true }
+either = { workspace = true }
+futures= { workspace = true }
+qi-value = { workspace = true }
+qi-format = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tokio-rustls = { workspace = true }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+pin-project-lite = { workspace = true }
 
 [dev-dependencies]
-assert_matches = "1.5.0"
-pretty_assertions = "1.3.0"
+assert_matches = { workspace = true }
+serde_json = { workspace = true }
+serde-value = { workspace = true }
+tokio-test = { workspace = true }

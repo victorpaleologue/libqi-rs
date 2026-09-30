@@ -1,57 +1,12 @@
-//! Message types and their common binary representation.
-//!
-//! ## Message Structure
-//!
-//! ```text
-//! ╔═══════════════════════════════════════════════════════════════════╗
-//! ║                              HEADER                               ║
-//! ╠═╤═══════════════╤═══════════════╤═══════════════╤═══════════════╤═╣
-//! ║ │       0       │       1       │       2       │       3       │ ║
-//! ║ ├─┬─┬─┬─┬─┬─┬─┬─┼─┬─┬─┬─┬─┬─┬─┬─┼─┬─┬─┬─┬─┬─┬─┬─┼─┬─┬─┬─┬─┬─┬─┬─┤ ║
-//! ║ │0│1│2│3│4│5│6│7│0│1│2│3│4│5│6│7│0│1│2│3│4│5│6│7│0│1│2│3│4│5│6│7│ ║
-//! ║ ├─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┤ ║
-//! ║ │                         magic cookie                          │ ║
-//! ║ ├───────────────────────────────────────────────────────────────┤ ║
-//! ║ │                          identifier                           │ ║
-//! ║ ├───────────────────────────────────────────────────────────────┤ ║
-//! ║ │                           body size                           │ ║
-//! ║ ├───────────────────────────────┬───────────────┬───────────────┤ ║
-//! ║ │            version            │     type      │    flags      │ ║
-//! ║ ├───────────────────────────────┴───────────────┴───────────────┤ ║
-//! ║ │                            service                            │ ║
-//! ║ ├ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ┤ ║
-//! ║ │                            object                             │ ║
-//! ║ ├ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ┤ ║
-//! ║ │                            action                             │ ║
-//! ╠═╧═══════════════════════════════════════════════════════════════╧═╣
-//! ║                               BODY                                ║
-//! ╚═══════════════════════════════════════════════════════════════════╝
-//! ```
-//!
-//! ### Header fields
-//!  - magic cookie: 4 bytes, 0x42dead42 as big endian
-//!  - id: 4 bytes unsigned integer, little endian
-//!  - size/len: 4 bytes unsigned integer, size of the body. may be 0, little endian
-//!  - version: 2 bytes unsigned integer, little endian
-//!  - type: 1 byte unsigned integer
-//!  - flags: 1 byte unsigned integer
-//!  - subject, 3 x 4 bytes unsigned integer, all little endian
-//!    - service
-//!    - object
-//!    - action
-//!
-//!  The total header size is therefore 28 bytes.
-
-pub(crate) mod codec;
-
-use crate::{capabilities, format, types};
-use bytes::{Buf, BufMut};
-use types::{
-    object::{ActionId, ObjectId, ServiceId},
-    Dynamic,
+use crate::{
+    format,
+    value::{object, service, KeyDynValueMap},
 };
+use bytes::Bytes;
+use qi_value::Dynamic;
 
 #[derive(
+    Default,
     Debug,
     Hash,
     PartialEq,
@@ -67,63 +22,170 @@ use types::{
     serde::Deserialize,
 )]
 #[serde(transparent)]
-pub struct Id(pub(crate) u32);
-
-impl Default for Id {
-    fn default() -> Self {
-        Self(1)
-    }
-}
-
-impl Id {
-    const SIZE: usize = std::mem::size_of::<u32>();
-
-    #[allow(unused)]
-    pub const fn new(value: u32) -> Self {
-        Self(value)
-    }
-
-    fn read<B>(buf: &mut B) -> Self
-    where
-        B: Buf,
-    {
-        Self(buf.get_u32_le())
-    }
-
-    fn write<B>(self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        buf.put_u32_le(self.0)
-    }
-}
+pub struct Id(pub u32);
 
 #[derive(
-    Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, derive_more::Display,
+    Default,
+    Debug,
+    Hash,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Clone,
+    Copy,
+    derive_more::Display,
+    serde::Serialize,
+    serde::Deserialize,
 )]
-struct Version(u16);
+pub struct Version(pub u16);
 
-impl Version {
-    const SIZE: usize = std::mem::size_of::<u16>();
-    const CURRENT: Self = Self(0);
+#[derive(
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Hash,
+    derive_more::Display,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub enum Type {
+    #[default]
+    #[display("call")]
+    Call,
+    #[display("reply")]
+    Reply,
+    #[display("error")]
+    Error,
+    #[display("post")]
+    Post,
+    #[display("event")]
+    Event,
+    #[display("capabilities")]
+    Capabilities,
+    #[display("cancel")]
+    Cancel,
+    #[display("canceled")]
+    Canceled,
+}
 
-    fn read<B>(buf: &mut B) -> Self
-    where
-        B: Buf,
-    {
-        Self(buf.get_u16_le())
+impl Type {
+    pub const DEFAULT: Self = Self::Call;
+}
+
+/// Flags of a message.
+///
+/// Flags qualify the payload of a message. They are represented as one byte in the message header.
+#[derive(
+    Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct Flags(u8);
+
+impl Flags {
+    /// No flags.
+    pub const NONE: Self = Self(0);
+
+    /// The payload is a dynamic value (of signature `m`) instead of the value of the expected
+    /// type. For calls, posts and events, the dynamic value contains a tuple of the arguments.
+    pub const DYNAMIC_PAYLOAD: Self = Self(1);
+
+    /// The payload of the call also contains a string, following the arguments, that is the
+    /// signature of the type the return value must be converted to. The reply to the call is
+    /// then sent with the [`DYNAMIC_PAYLOAD`](Self::DYNAMIC_PAYLOAD) flag.
+    pub const RETURN_TYPE: Self = Self(2);
+
+    const ALL: Self = Self(Self::DYNAMIC_PAYLOAD.0 | Self::RETURN_TYPE.0);
+
+    /// Constructs empty flags.
+    pub const fn empty() -> Self {
+        Self::NONE
     }
 
-    fn write<B>(self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        buf.put_u16_le(self.0)
+    /// Constructs flags from their bits representation, if all bits are known flags.
+    pub const fn from_bits(bits: u8) -> Option<Self> {
+        if bits & !Self::ALL.0 == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
+
+    /// The bits representation of the flags.
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Returns true if no flag is set.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Returns true if all the flags of `other` are set in `self`.
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Returns the union of both flags.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Returns true if the `DYNAMIC_PAYLOAD` flag is set.
+    pub const fn is_dynamic_payload(self) -> bool {
+        self.contains(Self::DYNAMIC_PAYLOAD)
+    }
+
+    /// Returns true if the `RETURN_TYPE` flag is set.
+    pub const fn has_return_type(self) -> bool {
+        self.contains(Self::RETURN_TYPE)
+    }
+}
+
+impl std::ops::BitOr for Flags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        self.union(rhs)
+    }
+}
+
+impl std::ops::BitOrAssign for Flags {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl std::ops::BitAnd for Flags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl std::fmt::Debug for Flags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut set = f.debug_set();
+        if self.is_dynamic_payload() {
+            set.entry(&"DYNAMIC_PAYLOAD");
+        }
+        if self.has_return_type() {
+            set.entry(&"RETURN_TYPE");
+        }
+        set.finish()
+    }
+}
+
+impl std::fmt::Display for Flags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#04b}", self.0)
     }
 }
 
 #[derive(
-    derive_new::new,
     Default,
     Clone,
     Copy,
@@ -134,136 +196,301 @@ impl Version {
     Hash,
     Debug,
     derive_more::Display,
+    serde::Serialize,
+    serde::Deserialize,
 )]
-#[display(fmt = "({service}, {object}, {action})")]
-pub(crate) struct Subject {
-    service: ServiceId,
-    object: ObjectId,
-    action: ActionId,
+#[display("{{{_0}.{_1}.{_2}}}")]
+pub struct Address(pub service::Id, pub object::Id, pub object::ActionId);
+
+impl Address {
+    pub const fn service(&self) -> service::Id {
+        self.0
+    }
+
+    pub const fn with_service(&self, service: service::Id) -> Self {
+        Self(service, self.1, self.2)
+    }
+
+    pub const fn object(&self) -> object::Id {
+        self.1
+    }
+
+    pub const fn with_object(&self, object: object::Id) -> Self {
+        Self(self.0, object, self.2)
+    }
+
+    pub const fn action(&self) -> object::ActionId {
+        self.2
+    }
+
+    pub const fn with_action(&self, action: object::ActionId) -> Self {
+        Self(self.0, self.1, action)
+    }
 }
 
-impl Subject {
-    const SIZE: usize = std::mem::size_of::<u32>() * 3;
+#[derive(Debug, Clone)]
+pub enum Message {
+    Call {
+        id: Id,
+        address: Address,
+        payload: Bytes,
+        flags: Flags,
+    },
+    Reply {
+        id: Id,
+        address: Address,
+        payload: Bytes,
+        flags: Flags,
+    },
+    Error {
+        id: Id,
+        address: Address,
+        error: String,
+    },
+    Post {
+        id: Id,
+        address: Address,
+        payload: Bytes,
+        flags: Flags,
+    },
+    Event {
+        id: Id,
+        address: Address,
+        payload: Bytes,
+        flags: Flags,
+    },
+    Capabilities {
+        id: Id,
+        address: Address,
+        capabilities: KeyDynValueMap,
+    },
+    Cancel {
+        id: Id,
+        address: Address,
+        call_id: Id,
+    },
+    Canceled {
+        id: Id,
+        address: Address,
+    },
+}
 
-    pub(crate) const fn service(&self) -> ServiceId {
-        self.service
+impl Default for Message {
+    fn default() -> Self {
+        Self::Call {
+            id: Default::default(),
+            address: Default::default(),
+            payload: Default::default(),
+            flags: Default::default(),
+        }
     }
+}
 
-    pub(crate) const fn object(&self) -> ObjectId {
-        self.object
-    }
-
-    pub(crate) const fn action(&self) -> ActionId {
-        self.action
-    }
-
-    fn read<B>(buf: &mut B) -> Self
-    where
-        B: Buf,
-    {
-        let service = ServiceId::new(buf.get_u32_le());
-        let object = ObjectId::new(buf.get_u32_le());
-        let action = ActionId::new(buf.get_u32_le());
-        Self {
-            service,
-            object,
-            action,
+impl Message {
+    /// The identifier of the message.
+    pub fn id(&self) -> Id {
+        match self {
+            Message::Call { id, .. }
+            | Message::Reply { id, .. }
+            | Message::Error { id, .. }
+            | Message::Post { id, .. }
+            | Message::Event { id, .. }
+            | Message::Capabilities { id, .. }
+            | Message::Cancel { id, .. }
+            | Message::Canceled { id, .. } => *id,
         }
     }
 
-    fn write<B>(self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        buf.put_u32_le(self.service.into());
-        buf.put_u32_le(self.object.into());
-        buf.put_u32_le(self.action.into());
+    /// The address of the message.
+    pub fn address(&self) -> Address {
+        match self {
+            Message::Call { address, .. }
+            | Message::Reply { address, .. }
+            | Message::Error { address, .. }
+            | Message::Post { address, .. }
+            | Message::Event { address, .. }
+            | Message::Capabilities { address, .. }
+            | Message::Cancel { address, .. }
+            | Message::Canceled { address, .. } => *address,
+        }
+    }
+
+    /// The type of the message.
+    pub fn ty(&self) -> Type {
+        match self {
+            Message::Call { .. } => Type::Call,
+            Message::Reply { .. } => Type::Reply,
+            Message::Error { .. } => Type::Error,
+            Message::Post { .. } => Type::Post,
+            Message::Event { .. } => Type::Event,
+            Message::Capabilities { .. } => Type::Capabilities,
+            Message::Cancel { .. } => Type::Cancel,
+            Message::Canceled { .. } => Type::Canceled,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> Result<(MetaData, Bytes), format::Error> {
+        match self {
+            Message::Call {
+                id,
+                address,
+                payload,
+                flags,
+            } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Call,
+                    flags,
+                },
+                payload,
+            )),
+            Message::Reply {
+                id,
+                address,
+                payload,
+                flags,
+            } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Reply,
+                    flags,
+                },
+                payload,
+            )),
+            Message::Error { id, address, error } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Error,
+                    flags: Flags::NONE,
+                },
+                format::to_bytes(&Dynamic(error))?,
+            )),
+            Message::Post {
+                id,
+                address,
+                payload,
+                flags,
+            } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Post,
+                    flags,
+                },
+                payload,
+            )),
+            Message::Event {
+                id,
+                address,
+                payload,
+                flags,
+            } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Event,
+                    flags,
+                },
+                payload,
+            )),
+            Message::Capabilities {
+                id,
+                address,
+                capabilities,
+            } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Capabilities,
+                    flags: Flags::NONE,
+                },
+                format::to_bytes(&capabilities)?,
+            )),
+            Message::Cancel {
+                id,
+                address,
+                call_id,
+            } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Cancel,
+                    flags: Flags::NONE,
+                },
+                format::to_bytes(&call_id)?,
+            )),
+            Message::Canceled { id, address } => Ok((
+                MetaData {
+                    id,
+                    address,
+                    ty: Type::Canceled,
+                    flags: Flags::NONE,
+                },
+                format::to_bytes(&())?,
+            )),
+        }
+    }
+
+    pub(crate) fn from_parts(meta: MetaData, payload: Bytes) -> Result<Self, format::Error> {
+        let MetaData {
+            id,
+            address,
+            ty,
+            flags,
+        } = meta;
+        let msg = match ty {
+            Type::Call => Self::Call {
+                id,
+                address,
+                payload,
+                flags,
+            },
+            Type::Reply => Self::Reply {
+                id,
+                address,
+                payload,
+                flags,
+            },
+            Type::Error => Self::Error {
+                id,
+                address,
+                error: format::from_slice::<Dynamic<String>>(&payload)?.into_inner(),
+            },
+            Type::Post => Self::Post {
+                id,
+                address,
+                payload,
+                flags,
+            },
+            Type::Event => Self::Event {
+                id,
+                address,
+                payload,
+                flags,
+            },
+            Type::Capabilities => Self::Capabilities {
+                id,
+                address,
+                capabilities: format::from_slice(&payload)?,
+            },
+            Type::Cancel => Self::Cancel {
+                id,
+                address,
+                call_id: format::from_slice(&payload)?,
+            },
+            Type::Canceled => Self::Canceled { id, address },
+        };
+        Ok(msg)
     }
 }
 
 #[derive(
-    Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, derive_more::UpperHex,
-)]
-#[upper_hex(fmt = "{:#X}", "Self::VALUE")]
-struct MagicCookie;
-
-impl MagicCookie {
-    const SIZE: usize = std::mem::size_of::<u32>();
-    const VALUE: u32 = 0x42dead42;
-
-    fn read<B>(buf: &mut B) -> Result<Self, InvalidMagicCookieValueError>
-    where
-        B: Buf,
-    {
-        let value = buf.get_u32();
-        if value == Self::VALUE {
-            Ok(MagicCookie)
-        } else {
-            Err(InvalidMagicCookieValueError(value))
-        }
-    }
-
-    fn write<B>(self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        buf.put_u32(Self::VALUE)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, thiserror::Error)]
-#[error("invalid message magic cookie value {0:x}")]
-pub(crate) struct InvalidMagicCookieValueError(u32);
-
-#[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-struct BodySize(usize);
-
-impl BodySize {
-    const SIZE: usize = std::mem::size_of::<u32>();
-
-    fn read<B>(buf: &mut B) -> Result<Self, BodyCannotBeRepresentedAsUSizeError>
-    where
-        B: Buf,
-    {
-        let size = buf.get_u32_le();
-        if size > (usize::MAX as u32) {
-            return Err(BodyCannotBeRepresentedAsUSizeError(size));
-        }
-        let size = size as usize;
-        Ok(Self(size))
-    }
-
-    fn write<B>(self, buf: &mut B) -> Result<(), BodyCannotBeRepresentedAsU32Error>
-    where
-        B: BufMut,
-    {
-        let size = self.0;
-        if size > (u32::MAX as usize) {
-            return Err(BodyCannotBeRepresentedAsU32Error(size));
-        }
-        let size = size as u32;
-        buf.put_u32_le(size);
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, thiserror::Error)]
-#[error(
-    "message body size {0} cannot be represented as an usize (the maximum for this system is {})",
-    usize::MAX
-)]
-pub(crate) struct BodyCannotBeRepresentedAsUSizeError(u32);
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, thiserror::Error)]
-#[error(
-    "message body size {0} cannot be represented as an u32 (the maximum for this system is {})",
-    u32::MAX
-)]
-pub(crate) struct BodyCannotBeRepresentedAsU32Error(usize);
-
-#[derive(
-    Clone,
+    Default,
     Copy,
+    Clone,
     PartialEq,
     Eq,
     PartialOrd,
@@ -271,550 +498,20 @@ pub(crate) struct BodyCannotBeRepresentedAsU32Error(usize);
     Debug,
     Hash,
     derive_more::Display,
-    num_derive::FromPrimitive,
-    num_derive::ToPrimitive,
+    serde::Serialize,
+    serde::Deserialize,
 )]
-#[repr(u8)]
-pub(crate) enum Kind {
-    #[display(fmt = "call")]
-    Call = 1,
-    #[display(fmt = "reply")]
-    Reply = 2,
-    #[display(fmt = "error")]
-    Error = 3,
-    #[display(fmt = "post")]
-    Post = 4,
-    #[display(fmt = "event")]
-    Event = 5,
-    #[display(fmt = "capabilities")]
-    Capabilities = 6,
-    #[display(fmt = "cancel")]
-    Cancel = 7,
-    #[display(fmt = "canceled")]
-    Canceled = 8,
+#[display("{id}:{ty}@{address}")]
+pub struct MetaData {
+    pub(crate) id: Id,
+    pub(crate) address: Address,
+    pub(crate) ty: Type,
+    pub(crate) flags: Flags,
 }
 
-impl Kind {
-    const SIZE: usize = std::mem::size_of::<u8>();
-
-    fn read<B>(buf: &mut B) -> Result<Self, InvalidKindValueError>
-    where
-        B: Buf,
-    {
-        buf.get_u8().try_into()
-    }
-
-    fn write<B>(self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        buf.put_u8(self.into())
-    }
-}
-
-impl Default for Kind {
-    fn default() -> Self {
-        Self::Call
-    }
-}
-
-impl From<Kind> for u8 {
-    fn from(kind: Kind) -> u8 {
-        use num_traits::ToPrimitive;
-        kind.to_u8().unwrap()
-    }
-}
-
-impl std::convert::TryFrom<u8> for Kind {
-    type Error = InvalidKindValueError;
-
-    fn try_from(value: u8) -> Result<Self, InvalidKindValueError> {
-        use num_traits::FromPrimitive;
-        Self::from_u8(value).ok_or(InvalidKindValueError(value))
-    }
-}
-
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, thiserror::Error)]
-#[error("invalid message kind value {0}")]
-pub(crate) struct InvalidKindValueError(u8);
-
-bitflags::bitflags! {
-    #[derive(Default, derive_more::Display)]
-    #[display(fmt = "{:b}", "self.bits()")]
-    pub(crate) struct Flags: u8 {
-        const DYNAMIC_PAYLOAD = 0b00000001;
-        const RETURN_TYPE = 0b00000010;
-    }
-}
-
-impl Flags {
-    const SIZE: usize = std::mem::size_of::<u8>();
-
-    fn read<B>(buf: &mut B) -> Result<Self, InvalidFlagsValueError>
-    where
-        B: Buf,
-    {
-        let byte = buf.get_u8();
-        let flags = Self::try_from(byte)?;
-        Ok(flags)
-    }
-
-    fn write<B>(self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        buf.put_u8(self.bits())
-    }
-}
-
-impl std::convert::TryFrom<u8> for Flags {
-    type Error = InvalidFlagsValueError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Self::from_bits(value).ok_or(InvalidFlagsValueError(value))
-    }
-}
-
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, thiserror::Error)]
-#[error("invalid message flags value {0}")]
-pub(crate) struct InvalidFlagsValueError(u8);
-
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-struct Header {
-    id: Id,
-    kind: Kind,
-    body_size: usize,
-    flags: Flags,
-    subject: Subject,
-}
-
-impl Header {
-    const MAGIC_COOKIE_OFFSET: usize = 0;
-    const ID_OFFSET: usize = Self::MAGIC_COOKIE_OFFSET + MagicCookie::SIZE;
-    const BODY_SIZE_OFFSET: usize = Self::ID_OFFSET + Id::SIZE;
-    const VERSION_OFFSET: usize = Self::BODY_SIZE_OFFSET + BodySize::SIZE;
-    const TYPE_OFFSET: usize = Self::VERSION_OFFSET + Version::SIZE;
-    const FLAGS_OFFSET: usize = Self::TYPE_OFFSET + Kind::SIZE;
-    const SUBJECT_OFFSET: usize = Self::FLAGS_OFFSET + Flags::SIZE;
-    const SIZE: usize = Self::SUBJECT_OFFSET + Subject::SIZE;
-
-    fn read<B>(buf: &mut B) -> Result<Self, ReadHeaderError>
-    where
-        B: Buf,
-    {
-        MagicCookie::read(buf)?;
-        let id = Id::read(buf);
-        let body_size = BodySize::read(buf)?.0;
-        let version = Version::read(buf);
-        if version != Version::CURRENT {
-            return Err(ReadHeaderError::UnsupportedVersion(version.0));
-        }
-        let ty = Kind::read(buf)?;
-        let flags = Flags::read(buf)?;
-        let subject = Subject::read(buf);
-        Ok(Self {
-            id,
-            kind: ty,
-            body_size,
-            flags,
-            subject,
-        })
-    }
-
-    fn write<B>(self, buf: &mut B) -> Result<(), WriteHeaderError>
-    where
-        B: BufMut,
-    {
-        let mut hbuf = [0u8; Header::SIZE];
-        let mut hbuf_ref = hbuf.as_mut();
-        MagicCookie.write(&mut hbuf_ref);
-        self.id.write(&mut hbuf_ref);
-        BodySize(self.body_size).write(&mut hbuf_ref)?;
-        Version::CURRENT.write(&mut hbuf_ref);
-        self.kind.write(&mut hbuf_ref);
-        self.flags.write(&mut hbuf_ref);
-        self.subject.write(&mut hbuf_ref);
-        buf.put(hbuf.as_ref());
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, thiserror::Error)]
-pub(crate) enum ReadHeaderError {
-    #[error(transparent)]
-    MagicCookie(#[from] InvalidMagicCookieValueError),
-
-    #[error(transparent)]
-    BodySize(#[from] BodyCannotBeRepresentedAsUSizeError),
-
-    #[error("unsupported message version {0}")]
-    UnsupportedVersion(u16),
-
-    #[error(transparent)]
-    Kind(#[from] InvalidKindValueError),
-
-    #[error(transparent)]
-    Flags(#[from] InvalidFlagsValueError),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, thiserror::Error)]
-pub(crate) enum WriteHeaderError {
-    #[error(transparent)]
-    BodySize(#[from] BodyCannotBeRepresentedAsU32Error),
-}
-
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, derive_more::Display)]
-#[display(fmt = "message(id={id}, {kind}, subject={subject}, flags={flags})")]
-pub(crate) struct Message {
-    id: Id,
-    kind: Kind,
-    subject: Subject,
-    flags: Flags,
-    content: format::Value,
-}
-
-impl Message {
-    fn new(header: Header, body: format::Value) -> Self {
-        Self {
-            id: header.id,
-            kind: header.kind,
-            subject: header.subject,
-            flags: header.flags,
-            content: body,
-        }
-    }
-
-    /// Builds a "call" message.
-    ///
-    /// This sets the kind, the id and the subject of the message.
-    pub(crate) fn call(id: Id, subject: Subject) -> Builder {
-        Builder::new()
-            .set_id(id)
-            .set_kind(Kind::Call)
-            .set_subject(subject)
-    }
-
-    /// Builds a "reply" message.
-    ///
-    /// This sets the kind, the id and the subject of the message.
-    pub(crate) fn reply(id: Id, subject: Subject) -> Builder {
-        Builder::new()
-            .set_id(id)
-            .set_kind(Kind::Reply)
-            .set_subject(subject)
-    }
-
-    /// Builds a "error" message.
-    ///
-    /// This sets the kind, the id, the subject and the content of the message.
-    pub(crate) fn error(
-        id: Id,
-        subject: Subject,
-        description: &str,
-    ) -> Result<Builder, format::Error> {
-        Builder::new()
-            .set_id(id)
-            .set_kind(Kind::Error)
-            .set_subject(subject)
-            .set_error_description(description)
-    }
-
-    /// Builds a "post" message.
-    ///
-    /// This sets the kind, the id and the subject of the message.
-    pub(crate) fn post(id: Id, subject: Subject) -> Builder {
-        Builder::new()
-            .set_id(id)
-            .set_kind(Kind::Post)
-            .set_subject(subject)
-    }
-
-    /// Builds a "event" message.
-    ///
-    /// This sets the kind, the id and the subject of the message.
-    pub(crate) fn event(id: Id, subject: Subject) -> Builder {
-        Builder::new()
-            .set_id(id)
-            .set_kind(Kind::Event)
-            .set_subject(subject)
-    }
-
-    /// Builds a "capabilities" message.
-    ///
-    /// This sets the kind, the id, the subject and the content of the message.
-    pub(crate) fn capabilities(
-        id: Id,
-        subject: Subject,
-        map: &capabilities::CapabilitiesMap,
-    ) -> Result<Builder, format::Error> {
-        Builder::new()
-            .set_id(id)
-            .set_kind(Kind::Capabilities)
-            .set_subject(subject)
-            .set_value(&map)
-    }
-
-    /// Builds a "cancel" message.
-    ///
-    /// This sets the kind, the id, the subject and the content of the message.
-    pub(crate) fn cancel(id: Id, subject: Subject, call_id: Id) -> Builder {
-        Builder::new()
-            .set_id(id)
-            .set_kind(Kind::Cancel)
-            .set_subject(subject)
-            .set_value(&call_id)
-            .expect("failed to serialize a message ID in the format")
-    }
-
-    /// Builds a "canceled" message.
-    ///
-    /// This sets the kind, the id and the subject of the message.
-    pub(crate) fn canceled(id: Id, subject: Subject) -> Builder {
-        Builder::new()
-            .set_id(id)
-            .set_subject(subject)
-            .set_kind(Kind::Canceled)
-    }
-
-    fn write<B>(self, buf: &mut B) -> Result<(), WriteHeaderError>
-    where
-        B: BufMut,
-    {
-        Header {
-            id: self.id,
-            kind: self.kind,
-            body_size: self.content.to_bytes().len(),
-            flags: self.flags,
-            subject: self.subject,
-        }
-        .write(buf)?;
-        buf.put(self.content.to_bytes());
-        Ok(())
-    }
-
-    pub(crate) fn id(&self) -> Id {
-        self.id
-    }
-
-    pub(crate) fn kind(&self) -> Kind {
-        self.kind
-    }
-
-    pub(crate) fn subject(&self) -> Subject {
-        self.subject
-    }
-
-    pub(crate) fn into_content(self) -> format::Value {
-        self.content
-    }
-
-    pub(crate) fn size(&self) -> usize {
-        Header::SIZE + self.content.as_bytes().len()
-    }
-
-    pub(crate) fn deserialize_content<T>(&self) -> Result<T, format::Error>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        // TODO: Check DYNAMIC_PAYLOAD flag
-        self.content.to_deserializable()
-    }
-
-    pub(crate) fn deserialize_error_description(&self) -> Result<String, GetErrorDescriptionError> {
-        let dynamic: Dynamic = self.deserialize_content()?;
-        match dynamic {
-            Dynamic::String(s) => Ok(s),
-            d => Err(GetErrorDescriptionError::DynamicValueIsNotAString(d)),
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum GetErrorDescriptionError {
-    #[error("dynamic value {0} of error description is not a string")]
-    DynamicValueIsNotAString(Dynamic),
-
-    #[error(transparent)]
-    Format(#[from] format::Error),
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct Builder(Message);
-
-impl Default for Builder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Builder {
-    pub(crate) fn new() -> Self {
-        Self(Message::default())
-    }
-
-    fn set_id(mut self, value: Id) -> Self {
-        self.0.id = value;
-        self
-    }
-
-    fn set_kind(mut self, value: Kind) -> Self {
-        self.0.kind = value;
-        self
-    }
-
-    fn set_subject(mut self, value: Subject) -> Self {
-        self.0.subject = value;
-        self
-    }
-
-    pub(crate) fn set_content(mut self, content: format::Value) -> Self {
-        self.0.content = content;
-        self
-    }
-
-    /// Sets the serialized representation of the value in the format as the content of the message.
-    /// It checks if the "dynamic payload" flag is set on the message to know how to serialize the value.
-    /// If the flag is set after calling this value, the value will not be serialized coherently with the flag.
-    pub(crate) fn set_value<T>(mut self, value: &T) -> Result<Self, format::Error>
-    where
-        T: serde::Serialize,
-    {
-        // TODO: if flags has dynamic_payload bit, serialize the value as a dynamic.
-        self.0.content = format::Value::from_serializable(value)?;
-        Ok(self)
-    }
-
-    pub(crate) fn set_error_description(self, description: &str) -> Result<Self, format::Error> {
-        self.set_value(&Dynamic::from(description))
-    }
-
-    pub(crate) fn build(self) -> Message {
-        self.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn test_header_size() {
-        assert_eq!(Header::SIZE, 28);
-    }
-
-    #[test]
-    fn test_header_read() {
-        let mut input: &[u8] = &[
-            0x42, 0xde, 0xad, 0x42, 0x84, 0x1c, 0x0f, 0x00, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x03, 0x00, 0x2f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb2, 0x00, 0x00, 0x00,
-        ];
-        assert_eq!(
-            Header::read(&mut input),
-            Ok(Header {
-                id: Id(990340),
-                kind: Kind::Error,
-                body_size: 35,
-                subject: Subject {
-                    service: ServiceId::new(47),
-                    object: ObjectId::new(1),
-                    action: ActionId::new(178)
-                },
-                flags: Flags::empty(),
-            })
-        );
-    }
-
-    #[test]
-    fn test_message_write() {
-        let msg = Message {
-            id: Id(329),
-            kind: Kind::Capabilities,
-            subject: Subject {
-                service: ServiceId::new(1),
-                object: ObjectId::new(1),
-                action: ActionId::new(104),
-            },
-            flags: Flags::RETURN_TYPE,
-            content: [0x17, 0x2b, 0xe6, 0x01, 0x5f].into(),
-        };
-        let mut buf = Vec::new();
-        msg.write(&mut buf).unwrap();
-
-        assert_eq!(
-            buf,
-            [
-                0x42, 0xde, 0xad, 0x42, // cookie
-                0x49, 0x01, 0x00, 0x00, // id
-                0x05, 0x00, 0x00, 0x00, // size
-                0x00, 0x00, 0x06, 0x02, // version, type, flags
-                0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x68, 0x00, 0x00,
-                0x00, // subject,
-                0x17, 0x2b, 0xe6, 0x01, 0x5f, // body
-            ]
-        );
-    }
-
-    #[test]
-    fn test_header_read_invalid_magic_cookie_value() {
-        let mut input: &[u8] = &[
-            0x42, 0xdf, 0xad, 0x42, 0x84, 0x1c, 0x0f, 0x00, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x03, 0x00, 0x2f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb2, 0x00, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00, 0x73, 0x1a, 0x00, 0x00, 0x00, 0x54, 0x68, 0x65, 0x20, 0x72,
-            0x6f, 0x62, 0x6f, 0x74, 0x20, 0x69, 0x73, 0x20, 0x6e, 0x6f, 0x74, 0x20, 0x6c, 0x6f,
-            0x63, 0x61, 0x6c, 0x69, 0x7a, 0x65, 0x64,
-        ];
-        let header = Header::read(&mut input);
-        assert_eq!(
-            header,
-            Err(ReadHeaderError::MagicCookie(InvalidMagicCookieValueError(
-                0x42dfad42
-            )))
-        );
-    }
-
-    #[test]
-    fn test_header_read_invalid_type_value() {
-        let mut input: &[u8] = &[
-            0x42, 0xde, 0xad, 0x42, // cookie,
-            0x84, 0x1c, 0x0f, 0x00, // id
-            0x23, 0x00, 0x00, 0x00, // size
-            0x00, 0x00, 0xaa, 0x00, // version, type, flags
-            0x2f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb2, 0x00, 0x00, 0x00, // subject
-        ];
-        let header = Header::read(&mut input);
-        assert_eq!(
-            header,
-            Err(ReadHeaderError::Kind(InvalidKindValueError(0xaa)))
-        );
-    }
-
-    #[test]
-    fn test_header_read_invalid_flags_value() {
-        let mut input: &[u8] = &[
-            0x42, 0xde, 0xad, 0x42, // cookie,
-            0x84, 0x1c, 0x0f, 0x00, // id
-            0x23, 0x00, 0x00, 0x00, // size
-            0x00, 0x00, 0x03, 0x13, // version, type, flags
-            0x2f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb2, 0x00, 0x00, 0x00, // subject
-        ];
-        let header = Header::read(&mut input);
-        assert_eq!(
-            header,
-            Err(ReadHeaderError::Flags(InvalidFlagsValueError(0x13)))
-        );
-    }
-
-    #[test]
-    fn test_header_read_unsupported_version() {
-        let mut input: &[u8] = &[
-            0x42, 0xde, 0xad, 0x42, // cookie,
-            0x84, 0x1c, 0x0f, 0x00, // id
-            0x23, 0x00, 0x00, 0x00, // size
-            0x12, 0x34, 0x03, 0x00, // version, type, flags
-            0x2f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb2, 0x00, 0x00, 0x00, // subject
-        ];
-        let header = Header::read(&mut input);
-        assert_eq!(header, Err(ReadHeaderError::UnsupportedVersion(0x3412)));
-    }
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub(crate) enum Response {
+    Reply(Bytes, Flags),
+    Error(String),
+    Canceled,
 }

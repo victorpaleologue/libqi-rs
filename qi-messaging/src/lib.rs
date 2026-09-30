@@ -1,6 +1,5 @@
 #![deny(unreachable_pub, unsafe_code)]
 // TODO: #![deny(missing_docs)]
-#![warn(unused_crate_dependencies)]
 #![warn(
     clippy::all,
     clippy::clone_on_ref_ptr,
@@ -13,6 +12,7 @@
     clippy::format_push_string,
     clippy::get_unwrap,
     clippy::if_then_some_else_none,
+    clippy::implicit_clone,
     clippy::integer_division,
     clippy::large_include_file,
     clippy::let_underscore_must_use,
@@ -20,6 +20,7 @@
     clippy::map_err_ignore,
     clippy::mem_forget,
     clippy::mixed_read_write_in_expression,
+    clippy::mod_module_files,
     clippy::multiple_inherent_impl,
     clippy::mutex_atomic,
     clippy::panic,
@@ -28,11 +29,8 @@
     clippy::rc_buffer,
     clippy::rc_mutex,
     clippy::rest_pat_in_fully_bound_structs,
-    clippy::same_name_method,
-    clippy::mod_module_files,
     clippy::str_to_string,
     clippy::string_slice,
-    clippy::string_to_string,
     clippy::todo,
     clippy::try_err,
     clippy::unnecessary_self_imports,
@@ -43,18 +41,26 @@
 #![doc(test(attr(deny(warnings))))]
 #![doc = include_str!("../README.md")]
 
-mod capabilities;
-mod channel;
+mod address;
+pub mod channel;
 mod client;
-mod message;
-mod messaging;
+pub mod codec;
+pub mod endpoint;
+mod error;
+pub mod handler;
+mod id;
+pub mod message;
 mod server;
-mod service;
-pub mod session;
 
-use qi_format as format;
-use qi_types as types;
-
-pub use service::{CallResult, CallTermination, GetSubject, Service, ToRequestId};
-#[doc(inline)]
-pub use {capabilities::CapabilitiesMap, service::RequestId};
+pub use self::{
+    address::{Address, Error as AddressError},
+    client::{Client, WeakClient},
+    codec::{DecodeError, Decoder, EncodeError, Encoder},
+    error::Error,
+    handler::{
+        CallHandler, CancellationToken, CapabilitiesHandler, EventHandler, Handler, PostHandler,
+    },
+    message::{Flags, Message},
+};
+pub use qi_format as format;
+pub use qi_value as value;

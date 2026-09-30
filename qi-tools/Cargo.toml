@@ -1,21 +1,34 @@
 [package]
 name = "qi-tools"
-description = ""
+description = "Command-line tools for `qi` spaces: the `qi-cli` command"
 
-license-file = "../LICENSE.txt"
-repository = "https://github.com/nyibbang/libqi-rs"
-version = "0.1.0-dev"
-edition = "2021"
-rust-version = "1.63"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+version.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-anyhow = "1.0.69"
-clap = { version = "= 3.2.25", features = ["derive"] }
-colored = "2.0.0"
-qi = { path = "../qi" }
-tokio = { version = "1.26.0", features = ["rt-multi-thread", "macros"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
+anyhow = { workspace = true }
+base64 = "0.23.1"
+clap = { workspace = true }
+colored = { workspace = true }
+futures = { workspace = true }
+libqi = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "signal", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [[bin]]
 name = "qi-cli"
+path = "src/main.rs"
