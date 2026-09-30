@@ -713,7 +713,7 @@ index eb554fa..b1705a6 100644
 +
 +# Local development against a checkout of libqi-rs next to this repository; drop this
 +# section to build against the published branch.
-+[patch."https://github.com/victorpaleologue/libqi-rs"]
++[patch."https://github.com/victorpaleologue/libqi-rs-vibe"]
 +qi = { path = "../../libqi-rs/qi" }
 diff --git a/crates/arora-hal-naoqi/CHANGELOG.md b/crates/arora-hal-naoqi/CHANGELOG.md
 new file mode 100644
@@ -776,7 +776,7 @@ index 0000000..94838d2
 +futures = "0.3"
 +log = "0.4"
 +# The Rust implementation of the qi framework (libqi), the NAOqi middleware.
-+qi = { git = "https://github.com/victorpaleologue/libqi-rs", branch = "claude/quirky-noether-olm9a7" }
++qi = { git = "https://github.com/victorpaleologue/libqi-rs-vibe", branch = "claude/quirky-noether-olm9a7" }
 +serde = { version = "1", features = ["derive"] }
 +serde_json = "1"
 +thiserror = "2"
@@ -871,7 +871,7 @@ index 0000000..f4fdc80
 +
 +NAO and Pepper robots as Arora devices, over their NAOqi middleware.
 +
-+The HAL talks to the robot with [`libqi-rs`](https://github.com/victorpaleologue/libqi-rs),
++The HAL talks to the robot with [`libqi-rs`](https://github.com/victorpaleologue/libqi-rs-vibe),
 +a Rust implementation of the `qi` framework: no C++ SDK, no cross-compilation, the HAL
 +runs on any host that reaches the robot over TCP (port 9559).
 +
@@ -1576,7 +1576,7 @@ index 0000000..a3df1bf
 +//! NAOqi robots (NAO, Pepper) as Arora HALs, over the `qi` framework.
 +//!
 +//! One [`arora_hal::Hal`] implementation, [`NaoqiHal`], connects to a robot's NAOqi with
-+//! [`libqi-rs`](https://github.com/victorpaleologue/libqi-rs) and exposes it as an Arora
++//! [`libqi-rs`](https://github.com/victorpaleologue/libqi-rs-vibe) and exposes it as an Arora
 +//! device: joint states, battery, inertial unit, sonars and touch sensors flow in as keys;
 +//! joint targets, stiffness, speech, LEDs and base velocity commands flow out to the
 +//! NAOqi services (`ALMotion`, `ALTextToSpeech`, `ALLeds`). The key vocabulary is in
